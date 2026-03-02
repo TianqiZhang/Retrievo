@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/HybridSearch.AzureOpenAI/HybridSearch.AzureOpenAI.csproj" />
+    <Project Path="src/HybridSearch.Cli/HybridSearch.Cli.csproj" />
+    <Project Path="src/HybridSearch/HybridSearch.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/HybridSearch.IntegrationTests/HybridSearch.IntegrationTests.csproj" />
+    <Project Path="tests/HybridSearch.Tests/HybridSearch.Tests.csproj" />
+  </Folder>
+</Solution>
