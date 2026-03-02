@@ -42,6 +42,7 @@ Non-goals: large-scale search (>10k–50k docs), distributed indexing, semantic 
   - `title`
   - `metadata` (key-value)
   - a single embedding vector (MVP)
+- **Nullable embeddings:** a document with no embedding (null vector) is valid. It participates in lexical search only and is excluded from vector retrieval. If an `IEmbeddingProvider` is configured at index-build time, documents without embeddings are embedded automatically from their `body` text.
 
 ### 1.3 Corpus ingestion
 - MVP MUST support building an index from:
@@ -149,9 +150,12 @@ HybridSearch.NET MUST support at least one of these usage models:
   - optional `IEmbeddingProvider`
 
 ### 3.2 Lexical retrieval implementation
-- Recommended: **Lucene.NET** with in-memory storage.
+- MVP: **Lucene.NET** with in-memory (`RAMDirectory`) storage.
 - Use BM25 scoring.
 - Analyzer selection behind `ITextAnalyzer`.
+
+> **Trade-off note — Lucene.NET as MVP expedient.**
+> Lucene.NET provides a proven inverted index, BM25 scoring, and analyzers out of the box, which accelerates MVP delivery. However, it is a large dependency with its own memory model, segment lifecycle, and threading assumptions. Once Phase 1 is complete and test coverage is solid, we should evaluate replacing Lucene.NET with a purpose-built in-memory inverted index. The `ILexicalRetriever` abstraction exists specifically to make this swap feasible without changing the public API. Acceptance criteria for any replacement: all existing lexical and hybrid tests pass, and memory/perf characteristics are equal or better for target corpus sizes (≤10k docs).
 
 ### 3.3 Vector retrieval implementation (MVP)
 - Store embeddings in memory as `float[]`.
@@ -160,15 +164,45 @@ HybridSearch.NET MUST support at least one of these usage models:
   - SIMD via `System.Numerics.Vector<float>`
   - optional parallelization (toggle; avoid default thread overhead for small N).
 
-### 3.4 Fusion implementation
+### 3.4 Embedding provider
+
+The library does **not** include a built-in embedding model. Embeddings are supplied via a pluggable `IEmbeddingProvider` interface.
+
+```csharp
+public interface IEmbeddingProvider
+{
+    Task<float[]> EmbedAsync(string text, CancellationToken ct = default);
+    Task<float[][]> EmbedBatchAsync(IReadOnlyList<string> texts, CancellationToken ct = default);
+    int Dimensions { get; }
+}
+```
+
+**MVP provider: Azure OpenAI embeddings.**
+- The library ships an `AzureOpenAIEmbeddingProvider` that calls the Azure OpenAI embedding endpoint (e.g., `text-embedding-3-small`).
+- Configuration: endpoint URL, API key, model deployment name, and optional dimensions override.
+- Batch support maps to the Azure OpenAI batch embedding API to minimize round-trips during ingestion.
+
+**Usage contract:**
+- If `IEmbeddingProvider` is supplied at index-build time, documents without a pre-computed vector will be embedded automatically.
+- If `IEmbeddingProvider` is **not** supplied, documents MUST include a pre-computed `Embedding` or they will participate in lexical search only.
+- Query-time embedding: when a `HybridQuery` has `Text` but no `Vector`, and an `IEmbeddingProvider` is available, the engine embeds the query text automatically before vector retrieval.
+- When no `IEmbeddingProvider` is configured and no `Vector` is supplied on the query, the search degrades gracefully to lexical-only.
+
+**Future providers (non-MVP):**
+- Local ONNX runtime (offline / air-gapped scenarios).
+- OpenAI (non-Azure) endpoint.
+- Custom user-supplied implementations.
+
+### 3.5 Fusion implementation
 - RRF (Reciprocal Rank Fusion):
   - for each list rank `r`, add `weight * 1/(rrfK + r)`
   - sum contributions across lists
   - sort by fused score
 - Deterministic tie-breakers:
   - stable ordering by `Id` when scores match.
+  - `Id` comparison uses **ordinal** (case-sensitive, culture-invariant) ordering.
 
-### 3.5 Incremental update strategy (Phase 2)
+### 3.6 Incremental update strategy (Phase 2)
 **Goal:** avoid partial visibility and keep tests deterministic.
 
 Preferred design: **read snapshots + commit boundary**.
@@ -186,13 +220,20 @@ Why this matters:
 - No mixed-state results.
 - Tests can assert “not visible until commit.”
 
-### 3.6 CLI implementation
+### 3.7 CLI implementation
 - Use a folder reader with basic frontmatter-aware parsing later (optional).
 - Implement `--watch` via debounced file system events.
 - For CLI testability:
   - prefer a file system abstraction (e.g., `System.IO.Abstractions`).
 
-### 3.7 Testing strategy
+**CLI embedding configuration:**
+- The CLI reads embedding provider settings from environment variables or a config file (e.g., `hybridsearch.json` in the target folder or user profile).
+- Required settings for Azure OpenAI: `HYBRIDSEARCH_AZURE_OPENAI_ENDPOINT`, `HYBRIDSEARCH_AZURE_OPENAI_KEY`, `HYBRIDSEARCH_AZURE_OPENAI_DEPLOYMENT`.
+- If no embedding provider is configured, the CLI operates in **lexical-only mode** and prints a warning.
+- `--embedding-provider` flag allows explicit selection (e.g., `--embedding-provider azure-openai`).
+- Embeddings are cached alongside the index to avoid re-embedding unchanged documents on subsequent runs.
+
+### 3.8 Testing strategy
 - Unit tests:
   - RRF correctness
   - vector similarity correctness
@@ -212,12 +253,14 @@ Why this matters:
 public interface IHybridSearchIndex : IDisposable
 {
     SearchResponse Search(HybridQuery query);
+    Task<SearchResponse> SearchAsync(HybridQuery query, CancellationToken ct = default);
     IndexStats GetStats();
 }
 
 public interface IMutableHybridSearchIndex : IHybridSearchIndex
 {
     void Upsert(Document doc);
+    Task UpsertAsync(Document doc, CancellationToken ct = default);
     bool Delete(string id);
 
     // Defines update visibility boundary
@@ -233,8 +276,30 @@ public sealed record HybridQuery(
     float LexicalWeight = 1f,
     float VectorWeight = 1f,
     int RrfK = 60,
-    bool Explain = false);
+    bool Explain = false,
+    Dictionary<string, string>? MetadataFilters = null);
 ```
+
+> **Parameter defaults rationale:**
+> - `TopK = 10` — standard default for retrieval; most callers want a short ranked list.
+> - `LexicalK = 50`, `VectorK = 50` — candidate pool size per retriever. Larger than `TopK` so RRF has enough candidates to fuse meaningfully. 50 is a reasonable balance between recall and compute for small corpora.
+> - `RrfK = 60` — the constant from the original RRF paper (Cormack, Clarke & Butt, 2009). Controls score decay; `60` is the standard value and works well empirically.
+> - `LexicalWeight = 1f`, `VectorWeight = 1f` — equal weighting by default; caller adjusts to taste.
+> - `MetadataFilters` — Phase 2. Exact-match key-value pairs applied as a post-retrieval filter. `null` means no filtering.
+
+### 4.1 Async API note
+
+Both sync and async methods are provided. The sync path is the natural fit for a pure in-memory index with no I/O. The async path exists because:
+- `IEmbeddingProvider.EmbedAsync` is inherently async (network call to Azure OpenAI).
+- `SearchAsync` needs to embed the query text when `Text` is provided but `Vector` is null and an embedding provider is configured.
+- `UpsertAsync` may need to embed the document body if no pre-computed vector is supplied.
+
+For the pure in-memory code path (no embedding call needed), the async methods may complete synchronously via `ValueTask` or similar. The sync methods will block on embedding if needed — callers in async contexts should prefer the async variants.
+
+### 4.2 Thread safety contract
+
+- `IHybridSearchIndex` (read-only, batch-built): **safe for concurrent reads** from multiple threads. No external synchronization required.
+- `IMutableHybridSearchIndex`: **safe for concurrent reads**. Writes (`Upsert`, `Delete`, `Commit`) require **external synchronization** or single-writer discipline. Concurrent reads during a write cycle observe the last committed snapshot (never partial state).
 
 ---
 
@@ -310,8 +375,11 @@ public sealed record HybridQuery(
 ---
 
 ## 6. Open questions
-- Default analyzer selection and configuration.
+- Default analyzer selection and configuration (StandardAnalyzer likely sufficient for MVP).
 - Snapshot format for Phase 3 (if implemented).
 - ANN library selection (Phase 4).
 - Chunking strategy (Phase 3): headings vs fixed-size tokens.
+- Lucene.NET replacement timeline: evaluate after Phase 1 test coverage is solid; criteria documented in §3.2.
+- Azure OpenAI embedding model selection: `text-embedding-3-small` (1536 dims) vs `text-embedding-3-large` (3072 dims) — smaller is likely sufficient for target corpus sizes and cheaper.
+- Whether `IDisposable` is needed on the read-only index if Lucene.NET is eventually replaced with a pure managed implementation.
 
