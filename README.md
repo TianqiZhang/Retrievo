@@ -17,6 +17,10 @@ Designed for corpora up to ~10k documents. If you need large-scale distributed s
 - **Lexical-only or vector-only** -- either component works standalone
 - **Explain mode** -- per-result score breakdown showing lexical rank, vector rank, and RRF contributions
 - **Fluent builder API** -- add documents programmatically or ingest from a folder of `.md`/`.txt` files
+- **Mutable index** -- incremental upsert/delete with explicit `Commit()` visibility boundary
+- **Fielded search** -- title and body fields with configurable boost weights
+- **Metadata filters** -- exact-match key-value filters applied post-fusion
+- **Query timing breakdown** -- per-component diagnostics (lexical, vector, fusion, embedding, filter)
 - **Pluggable embeddings** -- bring your own `IEmbeddingProvider`; ships with an Azure OpenAI provider
 - **Auto-embedding** -- documents without pre-computed embeddings are embedded automatically at build time
 - **SIMD-accelerated** -- brute-force vector search uses hardware intrinsics where available
@@ -228,19 +232,21 @@ Where `k` is a constant (default 60) and `rank` is the document's 1-based positi
 ```
 src/
   HybridSearch/                    Core library
-    Models/                        Document, HybridQuery, SearchResult, ExplainDetails
-    Abstractions/                  IHybridSearchIndex, IEmbeddingProvider, IFuser, ...
+    Models/                        Document, HybridQuery, SearchResult, ExplainDetails, QueryTimingBreakdown
+    Abstractions/                  IHybridSearchIndex, IMutableHybridSearchIndex, IEmbeddingProvider, IFuser, ...
     Fusion/                        RRF fusion implementation
     Vector/                        SIMD-accelerated brute-force cosine similarity
     Lexical/                       Lucene.NET BM25 lexical retrieval
-    HybridSearchIndex.cs           Main orchestrator
-    HybridSearchIndexBuilder.cs    Fluent builder API
+    HybridSearchIndex.cs           Read-only batch-built orchestrator
+    HybridSearchIndexBuilder.cs    Fluent builder API (batch)
+    MutableHybridSearchIndex.cs    Mutable orchestrator with upsert/delete/commit
+    MutableHybridSearchIndexBuilder.cs  Builder for mutable indexes
 
   HybridSearch.AzureOpenAI/        Azure OpenAI embedding provider
   HybridSearch.Cli/                CLI tool (System.CommandLine)
 
 tests/
-  HybridSearch.Tests/              Unit tests (133 tests)
+  HybridSearch.Tests/              Unit tests (185 tests)
   HybridSearch.IntegrationTests/   CLI integration tests (5 tests)
 ```
 
@@ -265,22 +271,26 @@ dotnet test tests/HybridSearch.IntegrationTests
 
 ## Test coverage
 
-138 tests covering:
+190 tests covering:
 
 | Category | Tests | What's covered |
 |----------|-------|----------------|
 | Models | 18 | Document, query, result immutability and equality |
-| RRF Fusion | 16 | Single/multi-list fusion, weights, TopK, explain, tie-breaking |
-| Vector Math | 12 | SIMD dot product, normalization, edge cases |
+| RRF Fusion | 11 | Single/multi-list fusion, weights, TopK, explain, tie-breaking |
+| Vector Math | 7 | SIMD dot product, normalization, edge cases |
 | Vector Retriever | 10 | Cosine similarity, ranking, TopK, empty index |
-| Lexical Retriever | 12 | BM25 search, case insensitivity, multi-term, TopK |
-| Corpus Generators | 8 | Deterministic generation, topic clustering, edge cases |
-| Index Builder | 14 | Fluent API, folder ingestion, embedding, validation |
-| Index Orchestrator | 11 | Hybrid/lexical/vector-only search, explain, async, dispose |
-| Azure OpenAI Provider | 4 | Construction, validation, interface compliance |
+| Lexical Retriever | 16 | BM25 search, fielded search, case insensitivity, multi-term, TopK |
+| Text Analyzer | 8 | Tokenization, case folding, empty input |
+| Corpus Generators | 13 | Deterministic generation, topic clustering, edge cases |
+| Index Builder | 12 | Fluent API, folder ingestion, embedding, validation |
+| Index Orchestrator | 12 | Hybrid/lexical/vector-only search, explain, async, dispose |
+| Mutable Index | 21 | Upsert, delete, commit visibility boundary, snapshot consistency |
+| Fielded Search | 8 | Title/body boosts, zero-boost exclusion, mutable index boosts |
+| Metadata Filters | 13 | Single/multi-filter, case sensitivity, null metadata, vector/hybrid filters |
+| Query Timing | 10 | Per-component timing breakdown, async, mutable index |
 | Explain Pipeline | 9 | End-to-end explain data flow through full pipeline |
 | Performance Benchmarks | 6 | 3k docs x 768 dims: vector, lexical, hybrid, explain overhead |
-| Azure OpenAI Provider | 4 | Constructor validation, interface contracts |
+| Azure OpenAI Provider | 11 | Constructor validation, interface contracts, batch/embed semantics |
 | CLI Integration | 5 | Query smoke, explain output, top-k, error handling |
 
 ## Performance
@@ -305,7 +315,7 @@ This library follows a phased development plan:
 |-------|--------|-------------|
 | **Phase 0** | Done | Foundation: models, interfaces, project scaffold |
 | **Phase 1** | Done | MVP hybrid retrieval, CLI, Azure OpenAI provider |
-| Phase 2 | Planned | Incremental updates (upsert/delete/commit), fielded search with boosts, metadata filters |
+| **Phase 2** | Done | Incremental updates (upsert/delete/commit), fielded search with boosts, metadata filters, query timing breakdown |
 | Phase 3 | Planned | Snapshot export/import, document chunking |
 | Phase 4 | Planned | Approximate nearest neighbor (ANN) for larger corpora |
 
