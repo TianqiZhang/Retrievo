@@ -255,4 +255,45 @@ public class HybridSearchIndexBuilderTests
             Assert.Equal("doc-1", response.Results[0].Id);
         }
     }
+
+    /// <summary>
+    /// Spec §5.2: "Markdown ingestion sanity: markdown file content is searchable
+    /// (at least plain text extraction; no requirement for AST parsing)."
+    /// </summary>
+    [Fact]
+    public void AddFolder_MarkdownContent_IsSearchable()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"hybridsearch_test_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "neural.md"),
+                "# Neural Networks\nNeural networks learn complex patterns from training data. " +
+                "Deep learning has transformed artificial intelligence research.");
+
+            File.WriteAllText(Path.Combine(tempDir, "databases.txt"),
+                "SQL queries retrieve structured data from relational tables. " +
+                "Indexing accelerates query performance on large datasets.");
+
+            using var index = new HybridSearchIndexBuilder()
+                .AddFolder(tempDir)
+                .Build();
+
+            // Search for content from the markdown file
+            var response = index.Search(new HybridQuery
+            {
+                Text = "neural networks deep learning",
+                TopK = 5
+            });
+
+            Assert.True(response.Results.Count > 0,
+                "Markdown file content should be searchable");
+            Assert.Contains(response.Results, r => r.Id.Contains("neural.md"));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
 }
