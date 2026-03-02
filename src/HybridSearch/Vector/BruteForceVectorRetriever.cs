@@ -13,6 +13,14 @@ public sealed class BruteForceVectorRetriever : IVectorRetriever
     private readonly List<(string Id, float[] NormalizedEmbedding)> _entries = new();
 
     /// <summary>
+    /// Get a snapshot copy of all entries for use in snapshot-based search.
+    /// </summary>
+    internal IReadOnlyList<(string Id, float[] NormalizedEmbedding)> GetSnapshotEntries()
+    {
+        return _entries.ToList();
+    }
+
+    /// <summary>
     /// The expected embedding dimension, or 0 if no embeddings have been added yet.
     /// </summary>
     public int Dimensions { get; private set; }
@@ -41,6 +49,58 @@ public sealed class BruteForceVectorRetriever : IVectorRetriever
 
         var normalized = VectorMath.Normalize(embedding);
         _entries.Add((id, normalized));
+    }
+
+    /// <summary>
+    /// Update an existing embedding or add it if not found.
+    /// The embedding is normalized on insert.
+    /// </summary>
+    public void Update(string id, float[] embedding)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        ArgumentNullException.ThrowIfNull(embedding);
+
+        if (embedding.Length == 0)
+            throw new ArgumentException("Embedding must not be empty.", nameof(embedding));
+
+        if (Dimensions == 0)
+            Dimensions = embedding.Length;
+        else if (embedding.Length != Dimensions)
+            throw new ArgumentException(
+                $"Embedding dimension mismatch: expected {Dimensions}, got {embedding.Length}.", nameof(embedding));
+
+        var normalized = VectorMath.Normalize(embedding);
+
+        for (int i = 0; i < _entries.Count; i++)
+        {
+            if (string.Equals(_entries[i].Id, id, StringComparison.Ordinal))
+            {
+                _entries[i] = (id, normalized);
+                return;
+            }
+        }
+
+        _entries.Add((id, normalized));
+    }
+
+    /// <summary>
+    /// Remove a document embedding by its ID.
+    /// </summary>
+    /// <returns>True if the document was found and removed; false otherwise.</returns>
+    public bool Remove(string id)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+
+        for (int i = 0; i < _entries.Count; i++)
+        {
+            if (string.Equals(_entries[i].Id, id, StringComparison.Ordinal))
+            {
+                _entries.RemoveAt(i);
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

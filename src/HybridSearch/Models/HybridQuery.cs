@@ -60,4 +60,16 @@ public sealed record HybridQuery
     /// all specified key-value pairs will be returned. Phase 2 feature; null means no filtering.
     /// </summary>
     public IReadOnlyDictionary<string, string>? MetadataFilters { get; init; }
+
+    /// <summary>
+    /// Boost multiplier for the title field during lexical search.
+    /// Higher values increase the relevance of title matches. Default is 1.0.
+    /// </summary>
+    public float TitleBoost { get; init; } = 1f;
+
+    /// <summary>
+    /// Boost multiplier for the body field during lexical search.
+    /// Higher values increase the relevance of body matches. Default is 1.0.
+    /// </summary>
+    public float BodyBoost { get; init; } = 1f;
 }

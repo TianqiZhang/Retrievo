@@ -16,4 +16,9 @@ public sealed record SearchResponse
     /// Total query execution time in milliseconds.
     /// </summary>
     public double QueryTimeMs { get; init; }
+
+    /// <summary>
+    /// Per-component timing breakdown for the query. Always populated.
+    /// </summary>
+    public QueryTimingBreakdown? TimingBreakdown { get; init; }
 }

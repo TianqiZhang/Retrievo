@@ -1,0 +1,139 @@
+using System.Diagnostics;
+using HybridSearch.Abstractions;
+using HybridSearch.Fusion;
+using HybridSearch.Lexical;
+using HybridSearch.Models;
+using HybridSearch.Vector;
+
+namespace HybridSearch;
+
+/// <summary>
+/// Fluent builder for constructing a <see cref="MutableHybridSearchIndex"/>.
+/// Supports seeding the index with initial documents, then allows incremental updates via the index itself.
+/// </summary>
+public sealed class MutableHybridSearchIndexBuilder
+{
+    private readonly List<Document> _documents = new();
+    private IEmbeddingProvider? _embeddingProvider;
+    private IFuser? _fuser;
+
+    /// <summary>
+    /// Add a single document to seed the index.
+    /// </summary>
+    public MutableHybridSearchIndexBuilder AddDocument(Document doc)
+    {
+        ArgumentNullException.ThrowIfNull(doc);
+        _documents.Add(doc);
+        return this;
+    }
+
+    /// <summary>
+    /// Add multiple documents to seed the index.
+    /// </summary>
+    public MutableHybridSearchIndexBuilder AddDocuments(IEnumerable<Document> docs)
+    {
+        ArgumentNullException.ThrowIfNull(docs);
+        _documents.AddRange(docs);
+        return this;
+    }
+
+    /// <summary>
+    /// Configure an embedding provider for automatic document and query embedding.
+    /// </summary>
+    public MutableHybridSearchIndexBuilder WithEmbeddingProvider(IEmbeddingProvider provider)
+    {
+        _embeddingProvider = provider ?? throw new ArgumentNullException(nameof(provider));
+        return this;
+    }
+
+    /// <summary>
+    /// Configure a custom fuser (defaults to <see cref="RrfFuser"/> if not specified).
+    /// </summary>
+    public MutableHybridSearchIndexBuilder WithFuser(IFuser fuser)
+    {
+        _fuser = fuser ?? throw new ArgumentNullException(nameof(fuser));
+        return this;
+    }
+
+    /// <summary>
+    /// Build the mutable index synchronously. Seed documents are indexed and an initial commit is created.
+    /// </summary>
+    public MutableHybridSearchIndex Build()
+    {
+        return BuildAsync(CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    /// <summary>
+    /// Build the mutable index asynchronously. Preferred when an embedding provider is configured.
+    /// </summary>
+    public async Task<MutableHybridSearchIndex> BuildAsync(CancellationToken ct = default)
+    {
+        var sw = Stopwatch.StartNew();
+
+        // Generate embeddings for documents that don't have them
+        await EnsureEmbeddingsAsync(ct).ConfigureAwait(false);
+
+        var lexicalRetriever = new LuceneLexicalRetriever();
+        var vectorRetriever = new BruteForceVectorRetriever();
+        var fuser = _fuser ?? new RrfFuser();
+        var docMap = new Dictionary<string, Document>(StringComparer.Ordinal);
+
+        int? embeddingDimension = null;
+
+        foreach (var doc in _documents)
+        {
+            docMap[doc.Id] = doc;
+
+            // Index in lexical retriever
+            lexicalRetriever.Add(doc.Id, doc.Body, doc.Title);
+
+            // Index in vector retriever (if embedding available)
+            if (doc.Embedding is not null)
+            {
+                vectorRetriever.Add(doc.Id, doc.Embedding);
+                embeddingDimension ??= doc.Embedding.Length;
+            }
+        }
+
+        sw.Stop();
+
+        var stats = new IndexStats
+        {
+            DocumentCount = _documents.Count,
+            EmbeddingDimension = embeddingDimension,
+            IndexBuildTimeMs = sw.Elapsed.TotalMilliseconds
+        };
+
+        return new MutableHybridSearchIndex(lexicalRetriever, vectorRetriever, fuser, _embeddingProvider, docMap, stats);
+    }
+
+    private async Task EnsureEmbeddingsAsync(CancellationToken ct)
+    {
+        if (_embeddingProvider is null)
+            return;
+
+        var docsNeedingEmbedding = _documents
+            .Select((doc, index) => (doc, index))
+            .Where(x => x.doc.Embedding is null)
+            .ToList();
+
+        if (docsNeedingEmbedding.Count == 0)
+            return;
+
+        var texts = docsNeedingEmbedding.Select(x => x.doc.Body).ToList();
+        var embeddings = await _embeddingProvider.EmbedBatchAsync(texts, ct).ConfigureAwait(false);
+
+        for (int i = 0; i < docsNeedingEmbedding.Count; i++)
+        {
+            var (doc, originalIndex) = docsNeedingEmbedding[i];
+            _documents[originalIndex] = new Document
+            {
+                Id = doc.Id,
+                Title = doc.Title,
+                Body = doc.Body,
+                Embedding = embeddings[i],
+                Metadata = doc.Metadata
+            };
+        }
+    }
+}

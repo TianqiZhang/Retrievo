@@ -137,7 +137,7 @@ public sealed class HybridSearchIndexBuilder
             docMap[doc.Id] = doc;
 
             // Index in lexical retriever
-            lexicalRetriever.Add(doc.Id, doc.Body);
+            lexicalRetriever.Add(doc.Id, doc.Body, doc.Title);
 
             // Index in vector retriever (if embedding available)
             if (doc.Embedding is not null)
