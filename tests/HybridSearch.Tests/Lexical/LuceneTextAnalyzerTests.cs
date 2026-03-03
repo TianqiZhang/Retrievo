@@ -82,7 +82,7 @@ public class LuceneTextAnalyzerTests
 
         Assert.Contains("version", tokens);
         Assert.Contains("3.14", tokens);
-        Assert.Contains("release", tokens);
+        Assert.Contains("releas", tokens); // Porter-stemmed form of "release"
         Assert.Contains("42", tokens);
     }
 }

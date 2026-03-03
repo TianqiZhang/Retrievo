@@ -1,7 +1,7 @@
 using HybridSearch.Abstractions;
 using HybridSearch.Models;
+using Lucene.Net.Analysis.TokenAttributes;
 using Lucene.Net.Index;
-using Lucene.Net.QueryParsers.Classic;
 using Lucene.Net.Search;
 using Lucene.Net.Search.Similarities;
 using Lucene.Net.Store;
@@ -85,9 +85,7 @@ public sealed class LuceneLexicalRetriever : ILexicalRetriever
         };
 
         if (!string.IsNullOrWhiteSpace(title))
-        {
             doc.Add(new LuceneTextField(FieldTitle, title, LuceneField.Store.NO));
-        }
 
         _writer.AddDocument(doc);
         _dirty = true;
@@ -113,9 +111,7 @@ public sealed class LuceneLexicalRetriever : ILexicalRetriever
         };
 
         if (!string.IsNullOrWhiteSpace(title))
-        {
             doc.Add(new LuceneTextField(FieldTitle, title, LuceneField.Store.NO));
-        }
 
         var term = new Term(FieldId, id);
         _writer.UpdateDocument(term, doc);
@@ -162,7 +158,7 @@ public sealed class LuceneLexicalRetriever : ILexicalRetriever
             // MutableHybridSearchIndex manages old reader lifecycle via AcquireSearcherSnapshot/ReleaseSearcherSnapshot.
             _reader = newReader;
             _searcher = new IndexSearcher(_reader);
-            _searcher.Similarity = new BM25Similarity();
+            _searcher.Similarity = new BM25Similarity(0.9f, 0.4f);
         }
 
         _dirty = false;
@@ -240,32 +236,8 @@ public sealed class LuceneLexicalRetriever : ILexicalRetriever
         if (_searcher is null || _reader!.NumDocs == 0)
             return Array.Empty<RankedItem>();
 
-        var escapedText = QueryParser.Escape(text);
-        Query query;
 
-        try
-        {
-            // Build per-field queries with individual boosts
-            var bodyParser = new QueryParser(Version, FieldBody, _textAnalyzer.Analyzer);
-            var bodyQuery = bodyParser.Parse(escapedText);
-
-            var titleParser = new QueryParser(Version, FieldTitle, _textAnalyzer.Analyzer);
-            var titleQuery = titleParser.Parse(escapedText);
-
-            var boolQuery = new BooleanQuery();
-
-            bodyQuery.Boost = bodyBoost;
-            boolQuery.Add(bodyQuery, Occur.SHOULD);
-
-            titleQuery.Boost = titleBoost;
-            boolQuery.Add(titleQuery, Occur.SHOULD);
-
-            query = boolQuery;
-        }
-        catch (ParseException)
-        {
-            return Array.Empty<RankedItem>();
-        }
+        var query = BuildQuery(text, titleBoost, bodyBoost);
 
         var topDocs = _searcher.Search(query, topK);
         var results = new RankedItem[topDocs.ScoreDocs.Length];
@@ -299,31 +271,8 @@ public sealed class LuceneLexicalRetriever : ILexicalRetriever
         if (string.IsNullOrWhiteSpace(text))
             return Array.Empty<RankedItem>();
 
-        var escapedText = QueryParser.Escape(text);
-        Query query;
 
-        try
-        {
-            var bodyParser = new QueryParser(Version, FieldBody, _textAnalyzer.Analyzer);
-            var bodyQuery = bodyParser.Parse(escapedText);
-
-            var titleParser = new QueryParser(Version, FieldTitle, _textAnalyzer.Analyzer);
-            var titleQuery = titleParser.Parse(escapedText);
-
-            var boolQuery = new BooleanQuery();
-
-            bodyQuery.Boost = bodyBoost;
-            boolQuery.Add(bodyQuery, Occur.SHOULD);
-
-            titleQuery.Boost = titleBoost;
-            boolQuery.Add(titleQuery, Occur.SHOULD);
-
-            query = boolQuery;
-        }
-        catch (ParseException)
-        {
-            return Array.Empty<RankedItem>();
-        }
+        var query = BuildQuery(text, titleBoost, bodyBoost);
 
         var topDocs = searcher.Search(query, topK);
         var results = new RankedItem[topDocs.ScoreDocs.Length];
@@ -343,6 +292,56 @@ public sealed class LuceneLexicalRetriever : ILexicalRetriever
         }
 
         return results;
+    }
+
+    /// <summary>
+    /// Build a bag-of-words Lucene query for the given raw text with per-field boost weights.
+    /// Analyzes the query text into terms, counts frequencies, and creates boosted TermQueries.
+    /// This matches Anserini's BagOfWordsQueryGenerator approach for improved retrieval quality.
+    /// </summary>
+    private Query BuildQuery(string text, float titleBoost, float bodyBoost)
+    {
+        var termFreqs = AnalyzeToTermFrequencies(text);
+        if (termFreqs.Count == 0)
+            return new BooleanQuery();
+
+        var boolQuery = new BooleanQuery();
+
+        foreach (var (term, freq) in termFreqs)
+        {
+            var bodyTermQuery = new TermQuery(new Term(FieldBody, term));
+            bodyTermQuery.Boost = freq * bodyBoost;
+            boolQuery.Add(bodyTermQuery, Occur.SHOULD);
+
+            var titleTermQuery = new TermQuery(new Term(FieldTitle, term));
+            titleTermQuery.Boost = freq * titleBoost;
+            boolQuery.Add(titleTermQuery, Occur.SHOULD);
+        }
+
+        return boolQuery;
+    }
+
+    /// <summary>
+    /// Analyze text into a dictionary of term → frequency using the configured analyzer.
+    /// </summary>
+    private Dictionary<string, int> AnalyzeToTermFrequencies(string text)
+    {
+        var termFreqs = new Dictionary<string, int>(StringComparer.Ordinal);
+        using var tokenStream = _textAnalyzer.Analyzer.GetTokenStream("contents", text);
+        var termAttr = tokenStream.GetAttribute<ICharTermAttribute>();
+        tokenStream.Reset();
+
+        while (tokenStream.IncrementToken())
+        {
+            var term = termAttr.ToString();
+            if (termFreqs.TryGetValue(term, out var count))
+                termFreqs[term] = count + 1;
+            else
+                termFreqs[term] = 1;
+        }
+
+        tokenStream.End();
+        return termFreqs;
     }
 
     /// <inheritdoc/>

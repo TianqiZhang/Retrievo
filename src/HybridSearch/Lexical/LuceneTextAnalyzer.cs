@@ -1,14 +1,18 @@
 using HybridSearch.Abstractions;
 using Lucene.Net.Analysis;
+using Lucene.Net.Analysis.Core;
+using Lucene.Net.Analysis.En;
 using Lucene.Net.Analysis.Standard;
 using Lucene.Net.Analysis.TokenAttributes;
+using Lucene.Net.Analysis.Util;
 using Lucene.Net.Util;
 
 namespace HybridSearch.Lexical;
 
 /// <summary>
-/// ITextAnalyzer implementation backed by Lucene.NET's StandardAnalyzer.
-/// Provides tokenization and normalization (lowercasing, stop-word removal).
+/// ITextAnalyzer implementation backed by a custom English analyzer matching
+/// Anserini's DefaultEnglishAnalyzer pipeline: StandardTokenizer, EnglishPossessiveFilter,
+/// LowerCaseFilter, StopFilter (English stop words), and PorterStemFilter.
 /// </summary>
 public sealed class LuceneTextAnalyzer : ITextAnalyzer
 {
@@ -16,11 +20,12 @@ public sealed class LuceneTextAnalyzer : ITextAnalyzer
     private bool _disposed;
 
     /// <summary>
-    /// Creates a new LuceneTextAnalyzer with a StandardAnalyzer using the specified Lucene version.
+    /// Creates a new LuceneTextAnalyzer with an English stemming analyzer
+    /// (Porter stemmer, English stop words, possessive filter).
     /// </summary>
     public LuceneTextAnalyzer()
     {
-        _analyzer = new StandardAnalyzer(LuceneVersion.LUCENE_48);
+        _analyzer = new EnglishStemAnalyzer(LuceneVersion.LUCENE_48);
     }
 
     /// <summary>

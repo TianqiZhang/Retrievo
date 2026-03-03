@@ -315,7 +315,7 @@ These are informational benchmarks, not hard SLAs. Actual performance depends on
 
 ## BEIR Benchmarks
 
-Validated against [BEIR](https://github.com/beir-cellar/beir) NFCorpus — hybrid search with tuned weights achieves **0.391 nDCG@10**, outperforming BM25 (0.304), vector-only (0.384), and the published Anserini baseline (0.325).
+Validated against [BEIR](https://github.com/beir-cellar/beir) NFCorpus — hybrid search with tuned weights achieves **0.391 nDCG@10**, outperforming BM25 (0.325), vector-only (0.384), and the published Anserini baseline (0.325). Our BM25 now matches the Anserini reference baseline exactly.
 
 The benchmark runner supports multiple BEIR datasets (NFCorpus, SciFact, FiQA, and more):
 

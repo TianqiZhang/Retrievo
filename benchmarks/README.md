@@ -66,19 +66,21 @@ The script encodes all documents and queries using the specified model and saves
 
 | Configuration | nDCG@10 | MAP@10 | Recall@100 | Avg Query |
 |---------------|---------|--------|------------|-----------|
-| Lexical-only (BM25) | 0.304 | 0.217 | 0.241 | 4.0ms |
-| Vector-only (text-embedding-3-small) | 0.384 | 0.291 | 0.360 | 7.7ms |
+| Lexical-only (BM25) | **0.325** | 0.239 | 0.250 | 2.4ms |
+| Vector-only (text-embedding-3-small) | 0.384 | 0.291 | 0.360 | 7.5ms |
+| Hybrid (BM25 + Vector) | 0.374 | 0.278 | 0.358 | 7.7ms |
 | Hybrid (L=0.1, V=1.0) | **0.391** | 0.294 | 0.360 | 8.2ms |
-| Hybrid (equal weights) | 0.366 | 0.270 | 0.366 | 8.5ms |
 | BEIR BM25 baseline (Anserini) | 0.325 | — | — | — |
 
 ### Analysis
 
+Our BM25 implementation now **matches the reference Anserini/Lucene baseline** (0.325 nDCG@10), up from 0.304 in the initial implementation. This was achieved by:
+
+1. **Tuning BM25 parameters** — k1=0.9, b=0.4 (matching Anserini defaults for BEIR)
+2. **English stemming** — Porter stemmer with English possessive filter and stop words
+3. **Bag-of-words query construction** — analyzer-based term extraction instead of query parser escaping
+
 Vector-only retrieval with `text-embedding-3-small` (1536 dims) achieves **0.384 nDCG@10**, outperforming published baselines including ColBERT-v2 (0.338) on this dataset. Hybrid search with tuned weights (lexical=0.1, vector=1.0) pushes this further to **0.391 nDCG@10**.
-
-With equal weights (1:1), hybrid scores below vector-only (0.366 vs 0.384) because BM25 is weaker on this biomedical domain and dilutes the stronger vector signal. A small lexical contribution (0.1 weight) adds just enough keyword matching to improve results without overwhelming the semantic signal.
-
-Our BM25 implementation scores within 6.5% of the reference Anserini/Lucene baseline.
 
 ## How It Works
 
