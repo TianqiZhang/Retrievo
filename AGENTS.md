@@ -1,6 +1,6 @@
 # AGENTS.md — Retrievo
 
-> Knowledge base for AI agents. Read this before making changes. See README.md for project overview, build commands, CLI reference, and dependencies.
+> Knowledge base for AI agents. Read this before making changes. See README.md for project overview and build commands.
 
 ---
 
