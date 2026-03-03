@@ -14,8 +14,8 @@
     <Authors>Tianqi Zhang</Authors>
     <Copyright>Copyright (c) Tianqi Zhang</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/TianqiZhang/hybridsearch.net</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/TianqiZhang/hybridsearch.net</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/TianqiZhang/Retrievo</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/TianqiZhang/Retrievo</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
 
     <!-- SourceLink (built-in for .NET 8 SDK + GitHub) -->
