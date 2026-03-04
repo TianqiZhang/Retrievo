@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <IsPackable>true</IsPackable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PackageId>Retrievo.AzureOpenAI</PackageId>
     <Description>Azure OpenAI embedding provider for Retrievo. Provides IEmbeddingProvider implementation using Azure OpenAI text-embedding models for automatic document and query embedding.</Description>
     <PackageTags>retrievo;azure;openai;embeddings;azure-openai;embedding-provider</PackageTags>

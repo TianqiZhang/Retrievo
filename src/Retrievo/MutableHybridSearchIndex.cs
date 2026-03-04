@@ -178,7 +178,7 @@ public sealed class MutableHybridSearchIndex : IMutableHybridSearchIndex
             throw new InvalidOperationException("Synchronous Search() cannot generate embeddings for query text. Use SearchAsync(), or provide a pre-computed Vector in the HybridQuery.");
         }
 
-        return ExecuteSearch(query, queryVector, embeddingTimeMs, snapshot, totalSw);
+        return ExecuteSearch(query, queryVector, embeddingTimeMs, snapshot, totalSw, CancellationToken.None);
     }
 
     /// <inheritdoc/>
@@ -201,7 +201,7 @@ public sealed class MutableHybridSearchIndex : IMutableHybridSearchIndex
             embeddingTimeMs = embedSw.Elapsed.TotalMilliseconds;
         }
 
-        return ExecuteSearch(query, queryVector, embeddingTimeMs, snapshot, totalSw);
+        return ExecuteSearch(query, queryVector, embeddingTimeMs, snapshot, totalSw, ct);
     }
 
     /// <inheritdoc/>
@@ -211,7 +211,7 @@ public sealed class MutableHybridSearchIndex : IMutableHybridSearchIndex
         return _snapshot.Stats;
     }
 
-    private SearchResponse ExecuteSearch(HybridQuery query, float[]? queryVector, double? embeddingTimeMs, SearchSnapshot snapshot, Stopwatch totalSw)
+    private SearchResponse ExecuteSearch(HybridQuery query, float[]? queryVector, double? embeddingTimeMs, SearchSnapshot snapshot, Stopwatch totalSw, CancellationToken ct)
     {
         double? lexicalTimeMs = null;
         double? vectorTimeMs = null;
@@ -246,7 +246,7 @@ public sealed class MutableHybridSearchIndex : IMutableHybridSearchIndex
         if (queryVector is not null && snapshot.VectorEntries.Count > 0)
         {
             var vecSw = Stopwatch.StartNew();
-            var vectorResults = SearchVectorSnapshot(queryVector, vectorK, snapshot.VectorEntries);
+            var vectorResults = SearchVectorSnapshot(queryVector, vectorK, snapshot.VectorEntries, ct);
             vecSw.Stop();
             vectorTimeMs = vecSw.Elapsed.TotalMilliseconds;
 
@@ -315,7 +315,7 @@ public sealed class MutableHybridSearchIndex : IMutableHybridSearchIndex
     }
 
     private static IReadOnlyList<RankedItem> SearchVectorSnapshot(
-        float[] queryVector, int topK, IReadOnlyList<(string Id, float[] NormalizedEmbedding)> entries)
+        float[] queryVector, int topK, IReadOnlyList<(string Id, float[] NormalizedEmbedding)> entries, CancellationToken ct)
     {
         if (entries.Count == 0)
             return Array.Empty<RankedItem>();
@@ -325,10 +325,15 @@ public sealed class MutableHybridSearchIndex : IMutableHybridSearchIndex
         var scored = new (string Id, float Similarity)[entries.Count];
         for (int i = 0; i < entries.Count; i++)
         {
+            if ((i & 0xFF) == 0) // every 256 iterations
+                ct.ThrowIfCancellationRequested();
+
             var (id, embedding) = entries[i];
             float sim = VectorMath.DotProduct(normalizedQuery, embedding);
             scored[i] = (id, sim);
         }
+
+        ct.ThrowIfCancellationRequested();
 
         Array.Sort(scored, (a, b) =>
         {

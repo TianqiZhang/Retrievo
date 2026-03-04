@@ -202,13 +202,17 @@ dotnet build
 dotnet test
 ```
 
-235 tests covering retrieval, vector math, fusion, mutable index, filters, field definitions, and CLI integration — 0 warnings.
+238 tests covering retrieval, vector math, fusion, mutable index, filters, field definitions, cancellation, and CLI integration — 0 warnings.
 
 ## Known Limitations
 
 - **Lexical (BM25) search is English-only**: The lexical retrieval pipeline uses `EnglishStemAnalyzer` (StandardTokenizer → EnglishPossessiveFilter → LowerCaseFilter → English StopWords → PorterStemmer). Non-English text will not be properly tokenized or stemmed for BM25 matching.
 - **Vector search is language-agnostic**: Semantic search works with any language supported by your embedding model (e.g., multilingual embeddings). Hybrid search inherits the English-only limitation for its lexical component.
-- **Workaround for non-English corpora**: Use vector-only search by omitting lexical configuration (set lexical retriever to `null` or use `WithVectorSearchOnly()`), or configure a custom analyzer for your language in a fork.
+- **Brute-force vector search is O(n) per query**: Designed for corpora up to ~10k documents. For larger corpora, consider ANN-based solutions (planned for Phase 4).
+- **In-memory only**: No persistence or crash recovery. The index must be rebuilt from source documents on each application start.
+- **No concurrent writers on `HybridSearchIndex`**: The immutable index is built once via the builder. Use `MutableHybridSearchIndex` for incremental upserts and deletes.
+- **Single-process**: No distributed or shared index support. The index lives in a single process's memory.
+- **Workaround for non-English corpora**: Use vector-only search by omitting lexical configuration, or configure a custom analyzer for your language in a fork.
 
 ---
 

@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <IsPackable>true</IsPackable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PackageId>Retrievo</PackageId>
     <Description>In-process, in-memory hybrid retrieval library for .NET. Combines BM25 lexical search (Lucene.NET), vector similarity search, and Reciprocal Rank Fusion (RRF) to search small local document corpora without external infrastructure.</Description>
     <PackageTags>retrievo;hybrid-search;search;lucene;vector-search;semantic-search;rrf;fusion;embeddings;bm25;rag;information-retrieval</PackageTags>

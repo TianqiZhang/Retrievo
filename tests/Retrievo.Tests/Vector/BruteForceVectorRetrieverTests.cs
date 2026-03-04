@@ -196,4 +196,44 @@ public class BruteForceVectorRetrieverTests
         Assert.Equal(4, retriever.Dimensions);
         Assert.Equal(1, retriever.Count);
     }
+
+    [Fact]
+    public void Search_CancelledToken_ThrowsOperationCanceledException()
+    {
+        var retriever = new BruteForceVectorRetriever();
+        retriever.Add("doc-1", new float[] { 1f, 0f, 0f });
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() =>
+            retriever.Search(new float[] { 1f, 0f, 0f }, topK: 10, cts.Token));
+    }
+
+    [Fact]
+    public void Search_WithCancellationToken_ReturnsNormalResults()
+    {
+        var retriever = new BruteForceVectorRetriever();
+        retriever.Add("doc-1", new float[] { 1f, 0f, 0f });
+        retriever.Add("doc-2", new float[] { 0f, 1f, 0f });
+
+        using var cts = new CancellationTokenSource();
+        var results = retriever.Search(new float[] { 1f, 0f, 0f }, topK: 10, cts.Token);
+
+        Assert.Equal(2, results.Count);
+        Assert.Equal("doc-1", results[0].Id);
+        Assert.Equal(1.0, results[0].Score, tolerance: 1e-5);
+    }
+
+    [Fact]
+    public void Search_DefaultCancellationToken_ReturnsNormalResults()
+    {
+        var retriever = new BruteForceVectorRetriever();
+        retriever.Add("doc-1", new float[] { 1f, 0f, 0f });
+
+        var results = retriever.Search(new float[] { 1f, 0f, 0f }, topK: 10, CancellationToken.None);
+
+        Assert.Single(results);
+        Assert.Equal("doc-1", results[0].Id);
+    }
 }

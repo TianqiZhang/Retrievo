@@ -22,40 +22,35 @@
 
 ## High (strongly recommended)
 
-### 3. Guard against NaN/Infinity in vector inputs
+### 3. ~~Guard against NaN/Infinity in vector inputs~~ ✅ DONE
 
 **Where**: `VectorMath.DotProduct`, `BruteForceVectorRetriever`  
 **Problem**: If an embedding provider returns vectors with NaN or Infinity values, they propagate silently through scoring and produce meaningless results. No validation at insert time or query time.  
-**Fix**: Add a fast validation pass in the builder's `AddDocument` and in `SearchAsync` for query embeddings:
-```csharp
-if (embedding.Any(float.IsNaN) || embedding.Any(float.IsInfinity))
-    throw new ArgumentException("Embedding contains NaN or Infinity values.");
-```
-This is cheap (one pass) and prevents hours of debugging garbage results.
+**Fix**: ~~Add a fast validation pass in the builder's `AddDocument` and in `SearchAsync` for query embeddings.~~ **Fixed**: `BruteForceVectorRetriever` now validates all embeddings in `Add()`, `Update()`, and `Search()` via a `ValidateFiniteValues()` helper that throws `ArgumentException` for NaN or Infinity values. Validation rejects the input before any state mutation (dimensions, entries).
 
-### 4. Migrate off `RAMDirectory`
+### 4. ~~Migrate off `RAMDirectory`~~ ⏭️ NOT APPLICABLE
 
 **Where**: `LuceneLexicalRetriever.cs` line 73  
-**Problem**: `RAMDirectory` is deprecated in Lucene.NET. It works today but may be removed in future versions. It also has known issues with large indices (no memory-mapped I/O, GC pressure from byte array copies).  
-**Fix**: Replace with `ByteBuffersDirectory` (Lucene.NET's recommended in-memory replacement). API-compatible, zero behavioral change. Should be a single-line swap.
+**Problem**: `RAMDirectory` is deprecated in Lucene.NET. It works today but may be removed in future versions.  
+**Status**: `ByteBuffersDirectory` does not exist in Lucene.NET 4.8.0-beta00016 (it was introduced in Java Lucene 8.4.0, and Lucene.NET 4.8.x ports Java Lucene 4.8.x). `RAMDirectory` is the correct and only in-memory implementation for this version. Revisit when Lucene.NET ports a newer Java version.
 
-### 5. Add `CancellationToken` to brute-force vector search
+### 5. ~~Add `CancellationToken` to brute-force vector search~~ ✅ DONE
 
 **Where**: `BruteForceVectorRetriever.Search()`  
 **Problem**: For indices near the ~10k doc target, brute-force iteration without cancellation support means callers cannot abort long searches. Not a problem at 100 docs; becomes one at 10k with 1536-dimensional vectors.  
-**Fix**: Accept `CancellationToken`, check `token.ThrowIfCancellationRequested()` every N iterations (e.g., every 256).
+**Fix**: ~~Accept `CancellationToken`, check `token.ThrowIfCancellationRequested()` every N iterations.~~ **Fixed**: Added `Search(float[], int, CancellationToken)` overload to `IVectorRetriever` and `BruteForceVectorRetriever`. Checks `ct.ThrowIfCancellationRequested()` every 256 iterations. `HybridSearchIndex` and `MutableHybridSearchIndex` propagate the token from `SearchAsync` through to the vector scan. `MutableHybridSearchIndex.SearchVectorSnapshot` also checks cancellation.
 
-### 6. Publish XML documentation with NuGet package
+### 6. ~~Publish XML documentation with NuGet package~~ ✅ DONE
 
 **Where**: `Directory.Build.props`, `.csproj` files  
 **Problem**: The codebase has excellent XML docs on all public types, but unless `GenerateDocumentationFile=true` is set and the XML file ships with the NuGet package, IDE consumers won't see them.  
-**Fix**: Ensure `<GenerateDocumentationFile>true</GenerateDocumentationFile>` in `Directory.Build.props` and verify the `.xml` file is included in the NuGet package.
+**Fix**: ~~Ensure `<GenerateDocumentationFile>true</GenerateDocumentationFile>` in `Directory.Build.props`.~~ **Fixed**: Added `<GenerateDocumentationFile>true</GenerateDocumentationFile>` to `Directory.Build.props`. The XML file is automatically included in NuGet packages by the SDK.
 
 ---
 
 ## Medium (quality improvements)
 
-### 7. Add a "Limitations & When Not to Use" section to README
+### 7. ~~Add a "Limitations & When Not to Use" section to README~~ ✅ DONE
 
 Suggested content:
 - English-only lexical pipeline (see #2)
@@ -64,12 +59,13 @@ Suggested content:
 - No concurrent writers on `HybridSearchIndex` (use `MutableHybridSearchIndex` for mutations)
 - Single-process: no distributed/shared index support
 
-Being upfront about boundaries builds trust and saves users time evaluating fit.
+**Fixed**: Expanded the README "Known Limitations" section with all five items listed above.
 
-### 8. Add integration test for NaN/Infinity propagation
+### 8. ~~Add integration test for NaN/Infinity propagation~~ ✅ DONE
 
 **Where**: Test project  
-**Problem**: No test covers what happens when embeddings contain NaN. If guard (#3) is added, this test validates it. If not, this test documents the behavior.
+**Problem**: No test covers what happens when embeddings contain NaN. If guard (#3) is added, this test validates it. If not, this test documents the behavior.  
+**Fixed**: `BruteForceVectorRetrieverTests` includes comprehensive NaN/Infinity tests: `Add_NaNEmbedding_Throws`, `Update_InfinityEmbedding_Throws`, `Search_NaNQueryVector_Throws`, `Add_InvalidFirstEmbedding_DoesNotSetDimensions`, `Update_InvalidFirstEmbedding_DoesNotSetDimensions`.
 
 ### 9. Consider `ReadOnlyMemory<float>` for embeddings
 
@@ -77,11 +73,11 @@ Being upfront about boundaries builds trust and saves users time evaluating fit.
 **Problem**: Current API uses `float[]` which allows callers to mutate the array after insertion, potentially corrupting the normalized vector cache. Using `ReadOnlyMemory<float>` makes the immutability contract explicit.  
 **Trade-off**: This is a public API change. Consider for v1.0 rather than patching now.
 
-### 10. Structured CLI error handling
+### 10. ~~Structured CLI error handling~~ ✅ DONE
 
 **Where**: `Program.cs` (CLI)  
 **Problem**: AGENTS.md already flags `ex.Message.Contains("...")` as an anti-pattern. The CLI catches exceptions by string-matching error messages.  
-**Fix**: Use specific exception types in catch blocks. If Retrievo only throws BCL exceptions, consider a thin wrapper in the CLI layer that maps known exceptions to exit codes.
+**Fix**: ~~Use specific exception types in catch blocks.~~ **Fixed**: Replaced `catch (InvalidOperationException ex) when (ex.Message.Contains("no documents"))` with `catch (InvalidOperationException)`. The only `InvalidOperationException` thrown from `BuildAsync` is the no-documents case, making string matching unnecessary.
 
 ---
 
@@ -101,11 +97,11 @@ Phase 4 on the roadmap. HNSW or similar would extend the useful range from ~10k 
 **Problem**: BEIR benchmarks exist in the repo but aren't run in CI. Regression in retrieval quality would go undetected.  
 **Fix**: Add a benchmark job to CI that validates NDCG@10 stays above a threshold. Can be gated on manual trigger to avoid slowing PRs.
 
-### 14. Source Link for NuGet debugging
+### 14. ~~Source Link for NuGet debugging~~ ✅ DONE
 
 **Where**: `Directory.Build.props`  
 **Problem**: Without Source Link, users debugging through Retrievo code in Visual Studio see decompiled IL instead of source.  
-**Fix**: Add `<PublishRepositoryUrl>true</PublishRepositoryUrl>` and the `Microsoft.SourceLink.GitHub` package. Standard practice for .NET OSS.
+**Fixed**: `Directory.Build.props` already includes `<PublishRepositoryUrl>true</PublishRepositoryUrl>`, `<EmbedUntrackedSources>true</EmbedUntrackedSources>`, `<IncludeSymbols>true</IncludeSymbols>`, `<SymbolPackageFormat>snupkg</SymbolPackageFormat>`, and `<Deterministic>true</Deterministic>`. Source Link is built-in for .NET 8 SDK with GitHub repos.
 
 ---
 

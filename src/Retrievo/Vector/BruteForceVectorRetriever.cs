@@ -117,12 +117,14 @@ public sealed class BruteForceVectorRetriever : IVectorRetriever
         return false;
     }
 
-    /// <summary>
-    /// Search for the nearest documents to the given query vector.
-    /// The query vector is normalized before comparison.
-    /// Returns results ranked by cosine similarity (descending).
-    /// </summary>
+    /// <inheritdoc/>
     public IReadOnlyList<RankedItem> Search(float[] vector, int topK)
+    {
+        return Search(vector, topK, CancellationToken.None);
+    }
+
+    /// <inheritdoc/>
+    public IReadOnlyList<RankedItem> Search(float[] vector, int topK, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(vector);
 
@@ -137,14 +139,19 @@ public sealed class BruteForceVectorRetriever : IVectorRetriever
 
         var normalizedQuery = VectorMath.Normalize(vector);
 
-        // Compute similarities — brute-force scan
+        // Compute similarities — brute-force scan with periodic cancellation checks
         var scored = new (string Id, float Similarity)[_entries.Count];
         for (int i = 0; i < _entries.Count; i++)
         {
+            if ((i & 0xFF) == 0) // every 256 iterations
+                ct.ThrowIfCancellationRequested();
+
             var (id, embedding) = _entries[i];
             float sim = VectorMath.DotProduct(normalizedQuery, embedding);
             scored[i] = (id, sim);
         }
+
+        ct.ThrowIfCancellationRequested();
 
         // Sort by descending similarity, then ordinal Id for tie-break
         Array.Sort(scored, (a, b) =>

@@ -68,7 +68,7 @@ public sealed class HybridSearchIndex : IHybridSearchIndex
             throw new InvalidOperationException("Synchronous Search() cannot generate embeddings for query text. Use SearchAsync(), or provide a pre-computed Vector in the HybridQuery.");
         }
 
-        return ExecuteSearch(query, queryVector, embeddingTimeMs, totalSw);
+        return ExecuteSearch(query, queryVector, embeddingTimeMs, totalSw, CancellationToken.None);
     }
 
     /// <inheritdoc/>
@@ -91,7 +91,7 @@ public sealed class HybridSearchIndex : IHybridSearchIndex
             embeddingTimeMs = embedSw.Elapsed.TotalMilliseconds;
         }
 
-        return ExecuteSearch(query, queryVector, embeddingTimeMs, totalSw);
+        return ExecuteSearch(query, queryVector, embeddingTimeMs, totalSw, ct);
     }
 
     /// <inheritdoc/>
@@ -101,7 +101,7 @@ public sealed class HybridSearchIndex : IHybridSearchIndex
         return _stats;
     }
 
-    private SearchResponse ExecuteSearch(HybridQuery query, float[]? queryVector, double? embeddingTimeMs, Stopwatch totalSw)
+    private SearchResponse ExecuteSearch(HybridQuery query, float[]? queryVector, double? embeddingTimeMs, Stopwatch totalSw, CancellationToken ct)
     {
         double? lexicalTimeMs = null;
         double? vectorTimeMs = null;
@@ -137,7 +137,7 @@ public sealed class HybridSearchIndex : IHybridSearchIndex
         if (queryVector is not null && _vectorRetriever.Count > 0)
         {
             var vecSw = Stopwatch.StartNew();
-            var vectorResults = _vectorRetriever.Search(queryVector, vectorK);
+            var vectorResults = _vectorRetriever.Search(queryVector, vectorK, ct);
             vecSw.Stop();
             vectorTimeMs = vecSw.Elapsed.TotalMilliseconds;
 

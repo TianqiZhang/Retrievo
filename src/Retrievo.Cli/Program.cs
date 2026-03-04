@@ -95,7 +95,7 @@ queryCommand.SetHandler(async (InvocationContext context) =>
     {
         index = await builder.BuildAsync(context.GetCancellationToken());
     }
-    catch (InvalidOperationException ex) when (ex.Message.Contains("no documents"))
+    catch (InvalidOperationException)
     {
         Console.Error.WriteLine($"Error: No indexable documents found in {folder.FullName}");
         context.ExitCode = 1;

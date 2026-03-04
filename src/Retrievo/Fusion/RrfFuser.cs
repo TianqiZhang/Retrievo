@@ -12,6 +12,7 @@ namespace Retrievo.Fusion;
 /// </summary>
 public sealed class RrfFuser : IFuser
 {
+    /// <inheritdoc/>
     public IReadOnlyList<SearchResult> Fuse(
         IReadOnlyList<(IReadOnlyList<RankedItem> Items, float Weight, string ListName)> rankedLists,
         int rrfK,
