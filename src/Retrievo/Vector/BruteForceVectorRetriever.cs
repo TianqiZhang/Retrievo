@@ -12,6 +12,16 @@ public sealed class BruteForceVectorRetriever : IVectorRetriever
 {
     private readonly List<(string Id, float[] NormalizedEmbedding)> _entries = new();
 
+    private static void ValidateFiniteValues(float[] embedding, string paramName)
+    {
+        for (int i = 0; i < embedding.Length; i++)
+        {
+            float value = embedding[i];
+            if (float.IsNaN(value) || float.IsInfinity(value))
+                throw new ArgumentException("Vector contains non-finite values (NaN or Infinity).", paramName);
+        }
+    }
+
     /// <summary>
     /// Get a snapshot copy of all entries for use in snapshot-based search.
     /// </summary>
@@ -41,6 +51,8 @@ public sealed class BruteForceVectorRetriever : IVectorRetriever
         if (embedding.Length == 0)
             throw new ArgumentException("Embedding must not be empty.", nameof(embedding));
 
+        ValidateFiniteValues(embedding, nameof(embedding));
+
         if (Dimensions == 0)
             Dimensions = embedding.Length;
         else if (embedding.Length != Dimensions)
@@ -62,6 +74,8 @@ public sealed class BruteForceVectorRetriever : IVectorRetriever
 
         if (embedding.Length == 0)
             throw new ArgumentException("Embedding must not be empty.", nameof(embedding));
+
+        ValidateFiniteValues(embedding, nameof(embedding));
 
         if (Dimensions == 0)
             Dimensions = embedding.Length;
@@ -111,6 +125,8 @@ public sealed class BruteForceVectorRetriever : IVectorRetriever
     public IReadOnlyList<RankedItem> Search(float[] vector, int topK)
     {
         ArgumentNullException.ThrowIfNull(vector);
+
+        ValidateFiniteValues(vector, nameof(vector));
 
         if (_entries.Count == 0)
             return Array.Empty<RankedItem>();

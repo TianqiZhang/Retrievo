@@ -31,6 +31,7 @@ dotnet add package Retrievo.AzureOpenAI --prerelease
 - **Fielded Search**: Title and body fields with independent boost weights.
 - **Metadata Filters**: Exact-match, range, and contains filtering post-fusion.
 - **Field Definitions**: Declare field types (`String`, `StringArray`) at index time for automatic filter semantics.
+- **Finite Vector Validation**: Rejects NaN/Infinity embeddings and query vectors with clear exceptions.
 
 ### Index Management
 - **Fluent Builder**: Clean API for batch construction and folder ingestion.
@@ -201,7 +202,7 @@ dotnet build
 dotnet test
 ```
 
-225 tests covering retrieval, vector math, fusion, mutable index, filters, field definitions, and CLI integration — 0 warnings.
+235 tests covering retrieval, vector math, fusion, mutable index, filters, field definitions, and CLI integration — 0 warnings.
 
 ## Known Limitations
 
