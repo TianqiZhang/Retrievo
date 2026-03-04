@@ -32,7 +32,7 @@
 
 **Where**: `LuceneLexicalRetriever.cs` line 73  
 **Problem**: `RAMDirectory` is deprecated in Lucene.NET. It works today but may be removed in future versions.  
-**Status**: `ByteBuffersDirectory` does not exist in Lucene.NET 4.8.0-beta00016 (it was introduced in Java Lucene 8.4.0, and Lucene.NET 4.8.x ports Java Lucene 4.8.x). `RAMDirectory` is the correct and only in-memory implementation for this version. Revisit when Lucene.NET ports a newer Java version.
+**Status**: `ByteBuffersDirectory` does not exist in Lucene.NET 4.8.0-beta00017 (it was introduced in Java Lucene 8.4.0, and Lucene.NET 4.8.x ports Java Lucene 4.8.x). `RAMDirectory` is the correct and only in-memory implementation for this version. Revisit when Lucene.NET ports a newer Java version.
 
 ### 5. ~~Add `CancellationToken` to brute-force vector search~~ ✅ DONE
 
