@@ -203,7 +203,14 @@ dotnet test
 
 225 tests covering retrieval, vector math, fusion, mutable index, filters, field definitions, and CLI integration — 0 warnings.
 
+## Known Limitations
+
+- **Lexical (BM25) search is English-only**: The lexical retrieval pipeline uses `EnglishStemAnalyzer` (StandardTokenizer → EnglishPossessiveFilter → LowerCaseFilter → English StopWords → PorterStemmer). Non-English text will not be properly tokenized or stemmed for BM25 matching.
+- **Vector search is language-agnostic**: Semantic search works with any language supported by your embedding model (e.g., multilingual embeddings). Hybrid search inherits the English-only limitation for its lexical component.
+- **Workaround for non-English corpora**: Use vector-only search by omitting lexical configuration (set lexical retriever to `null` or use `WithVectorSearchOnly()`), or configure a custom analyzer for your language in a fork.
+
 ---
+
 
 ## License
 
