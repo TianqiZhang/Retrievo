@@ -29,7 +29,7 @@ dotnet add package Retrievo.AzureOpenAI --prerelease
 - **Standalone Modes**: Use lexical-only or vector-only search when needed.
 - **Explain Mode**: Detailed score breakdown for every search result.
 - **Fielded Search**: Title and body fields with independent boost weights.
-- **Metadata Filters**: Exact-match key-value filtering post-fusion.
+- **Metadata Filters**: Exact-match, range, and contains filtering post-fusion.
 
 ### Index Management
 - **Fluent Builder**: Clean API for batch construction and folder ingestion.
@@ -157,7 +157,7 @@ Default parameters (`LexicalWeight=0.5, VectorWeight=1.0, RrfK=20, TitleBoost=0.
 | Phase | Status | Description |
 |-------|--------|-------------|
 | **Phase 1** | Done | MVP hybrid retrieval, CLI, Azure OpenAI provider |
-| **Phase 2** | Done | Mutable index, fielded search, filters, diagnostics |
+| **Phase 2** | Done | Mutable index, fielded search, filters (exact, range, contains), diagnostics |
 | **Phase 3** | Planned | Snapshot export and import |
 | **Phase 4** | Planned | ANN support for larger corpora |
 
@@ -172,7 +172,7 @@ dotnet build
 dotnet test
 ```
 
-194 tests covering retrieval, vector math, fusion, mutable index, and CLI integration — 0 warnings.
+218 tests covering retrieval, vector math, fusion, mutable index, filters, and CLI integration — 0 warnings.
 
 ---
 

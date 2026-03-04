@@ -63,6 +63,28 @@ public sealed record HybridQuery
     public IReadOnlyDictionary<string, string>? MetadataFilters { get; init; }
 
     /// <summary>
+    /// Optional range filters for metadata values. Each filter specifies a key and inclusive Min/Max bounds.
+    /// Values are compared using ordinal string comparison, which works correctly for ISO 8601 timestamps
+    /// and zero-padded numeric strings. All range filters must match (AND semantics). Null means no range filtering.
+    /// </summary>
+    public IReadOnlyList<MetadataRangeFilter>? MetadataRangeFilters { get; init; }
+
+    /// <summary>
+    /// Optional contains-match metadata filters. For each key-value pair, the document's metadata value
+    /// for that key is split by the <see cref="MetadataContainsDelimiter"/> and the filter passes if any
+    /// element equals the filter value (ordinal comparison). Useful for multi-value metadata fields.
+    /// All contains filters must match (AND semantics). Null means no contains filtering.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? MetadataContainsFilters { get; init; }
+
+    /// <summary>
+    /// Delimiter character used to split metadata values for <see cref="MetadataContainsFilters"/>.
+    /// Default is '|'. For example, a metadata value "proj1|proj2|proj3" with delimiter '|'
+    /// and filter value "proj2" would match.
+    /// </summary>
+    public char MetadataContainsDelimiter { get; init; } = '|';
+
+    /// <summary>
     /// Boost multiplier for the title field during lexical search.
     /// Higher values increase the relevance of title matches. Default is 0.5,
     /// tuned via BEIR benchmark sweeps across NFCorpus and SciFact datasets.
@@ -76,14 +98,25 @@ public sealed record HybridQuery
     public float BodyBoost { get; init; } = 1f;
 
     /// <summary>
-    /// Validates that TitleBoost and BodyBoost are finite non-negative values.
+    /// Validates that TitleBoost and BodyBoost are finite non-negative values,
+    /// and that any range filters have at least one bound specified.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when a boost value is NaN, infinite, or negative.</exception>
+    /// <exception cref="ArgumentException">Thrown when a range filter has both Min and Max null.</exception>
     internal void ValidateBoosts()
     {
         if (float.IsNaN(TitleBoost) || float.IsInfinity(TitleBoost) || TitleBoost < 0)
             throw new ArgumentOutOfRangeException(nameof(TitleBoost), $"TitleBoost must be a finite non-negative value, got {TitleBoost}.");
         if (float.IsNaN(BodyBoost) || float.IsInfinity(BodyBoost) || BodyBoost < 0)
             throw new ArgumentOutOfRangeException(nameof(BodyBoost), $"BodyBoost must be a finite non-negative value, got {BodyBoost}.");
+
+        if (MetadataRangeFilters is not null)
+        {
+            foreach (var filter in MetadataRangeFilters)
+            {
+                ArgumentNullException.ThrowIfNull(filter, nameof(MetadataRangeFilters));
+                filter.Validate();
+            }
+        }
     }
 }

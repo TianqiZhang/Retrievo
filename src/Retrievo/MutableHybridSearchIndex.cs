@@ -208,7 +208,10 @@ public sealed class MutableHybridSearchIndex : IMutableHybridSearchIndex
         double fusionTimeMs = 0;
         double? filterTimeMs = null;
 
-        bool hasMetadataFilters = query.MetadataFilters is not null && query.MetadataFilters.Count > 0;
+        bool hasExactFilters = query.MetadataFilters is not null && query.MetadataFilters.Count > 0;
+        bool hasRangeFilters = query.MetadataRangeFilters is not null && query.MetadataRangeFilters.Count > 0;
+        bool hasContainsFilters = query.MetadataContainsFilters is not null && query.MetadataContainsFilters.Count > 0;
+        bool hasMetadataFilters = hasExactFilters || hasRangeFilters || hasContainsFilters;
 
         int overRetrievalMultiplier = hasMetadataFilters ? 4 : 1;
         int lexicalK = query.LexicalK * overRetrievalMultiplier;
@@ -263,25 +266,13 @@ public sealed class MutableHybridSearchIndex : IMutableHybridSearchIndex
         if (hasMetadataFilters && results.Count > 0)
         {
             var filterSw = Stopwatch.StartNew();
-            var filters = query.MetadataFilters!;
             var filtered = new List<SearchResult>();
 
             foreach (var result in results)
             {
                 if (snapshot.Documents.TryGetValue(result.Id, out var doc) && doc.Metadata is not null)
                 {
-                    bool matches = true;
-                    foreach (var (key, value) in filters)
-                    {
-                        if (!doc.Metadata.TryGetValue(key, out var docValue) ||
-                            !string.Equals(docValue, value, StringComparison.Ordinal))
-                        {
-                            matches = false;
-                            break;
-                        }
-                    }
-
-                    if (matches)
+                    if (MatchesAllFilters(doc, query))
                         filtered.Add(result);
                 }
 
@@ -312,6 +303,66 @@ public sealed class MutableHybridSearchIndex : IMutableHybridSearchIndex
             QueryTimeMs = totalSw.Elapsed.TotalMilliseconds,
             TimingBreakdown = timing
         };
+    }
+
+    /// <summary>
+    /// Checks whether a document matches all configured metadata filters (exact, range, and contains).
+    /// </summary>
+    private static bool MatchesAllFilters(Document doc, HybridQuery query)
+    {
+        var metadata = doc.Metadata!;
+
+        // Exact-match filters
+        if (query.MetadataFilters is not null)
+        {
+            foreach (var (key, value) in query.MetadataFilters)
+            {
+                if (!metadata.TryGetValue(key, out var docValue) ||
+                    !string.Equals(docValue, value, StringComparison.Ordinal))
+                    return false;
+            }
+        }
+
+        // Range filters (ordinal string comparison — works for ISO 8601 and zero-padded numbers)
+        if (query.MetadataRangeFilters is not null)
+        {
+            foreach (var filter in query.MetadataRangeFilters)
+            {
+                if (!metadata.TryGetValue(filter.Key, out var docValue))
+                    return false;
+
+                if (filter.Min is not null && string.Compare(docValue, filter.Min, StringComparison.Ordinal) < 0)
+                    return false;
+
+                if (filter.Max is not null && string.Compare(docValue, filter.Max, StringComparison.Ordinal) > 0)
+                    return false;
+            }
+        }
+
+        // Contains filters (split metadata value by delimiter, check if any element matches)
+        if (query.MetadataContainsFilters is not null)
+        {
+            foreach (var (key, value) in query.MetadataContainsFilters)
+            {
+                if (!metadata.TryGetValue(key, out var docValue))
+                    return false;
+
+                bool found = false;
+                foreach (var segment in docValue.Split(query.MetadataContainsDelimiter))
+                {
+                    if (string.Equals(segment, value, StringComparison.Ordinal))
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (!found)
+                    return false;
+            }
+        }
+
+        return true;
     }
 
     private static IReadOnlyList<RankedItem> SearchVectorSnapshot(
