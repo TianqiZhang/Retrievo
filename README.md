@@ -2,22 +2,22 @@
 
 ***Hybrid search for .NET — BM25 + vectors + RRF fusion, zero infrastructure***
 
-[![NuGet](https://img.shields.io/nuget/vpre/Retrievo?color=blue)](https://www.nuget.org/packages/Retrievo) [![Downloads](https://img.shields.io/nuget/dt/Retrievo)](https://www.nuget.org/packages/Retrievo) [![License](https://img.shields.io/github/license/TianqiZhang/Retrievo)](https://github.com/TianqiZhang/Retrievo/blob/master/LICENSE) [![.NET](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet)](https://dotnet.microsoft.com/)
+[![NuGet](https://img.shields.io/nuget/vpre/Retrievo?color=blue)](https://www.nuget.org/packages/Retrievo) [![NuGet AzureOpenAI](https://img.shields.io/nuget/vpre/Retrievo.AzureOpenAI?color=blue&label=Retrievo.AzureOpenAI)](https://www.nuget.org/packages/Retrievo.AzureOpenAI) [![Downloads](https://img.shields.io/nuget/dt/Retrievo)](https://www.nuget.org/packages/Retrievo) [![License](https://img.shields.io/github/license/TianqiZhang/Retrievo)](https://github.com/TianqiZhang/Retrievo/blob/master/LICENSE) [![.NET](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet)](https://dotnet.microsoft.com/)
 
 Retrievo is an open-source, in-process, in-memory search library for .NET that combines BM25 lexical matching with vector similarity search. Results are merged via [Reciprocal Rank Fusion (RRF)](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf) into a single ranked list — no external servers, no databases, no infrastructure. Designed for corpora up to ~10k documents: local agent memory, small RAG pipelines, developer tools, and offline/edge scenarios.
 
 ---
 
-## Quick Install
+## Packages
+
+| Package | Description |
+|---------|-------------|
+| [`Retrievo`](https://www.nuget.org/packages/Retrievo) | Core library — BM25 lexical search, brute-force vector search, RRF fusion, builder, mutable index. Zero external service dependencies. |
+| [`Retrievo.AzureOpenAI`](https://www.nuget.org/packages/Retrievo.AzureOpenAI) | Azure OpenAI embedding provider. Install this if you want automatic document/query embedding via Azure OpenAI. Adds a dependency on `Azure.AI.OpenAI`. |
 
 ```shell
 dotnet add package Retrievo --prerelease
-```
-
-For Azure OpenAI embeddings:
-
-```shell
-dotnet add package Retrievo.AzureOpenAI --prerelease
+dotnet add package Retrievo.AzureOpenAI --prerelease  # optional, for Azure OpenAI embeddings
 ```
 
 ---
