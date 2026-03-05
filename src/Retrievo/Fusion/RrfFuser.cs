@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Retrievo.Abstractions;
 using Retrievo.Models;
 
@@ -38,9 +39,8 @@ public sealed class RrfFuser : IFuser
                 int rank = item.Rank; // 1-based
                 double contribution = weight * (1.0 / (rrfK + rank));
 
-                if (!scores.TryGetValue(item.Id, out double existing))
-                    existing = 0;
-                scores[item.Id] = existing + contribution;
+                ref double scoreRef = ref CollectionsMarshal.GetValueRefOrAddDefault(scores, item.Id, out _);
+                scoreRef += contribution;
 
                 if (explainData is not null)
                 {

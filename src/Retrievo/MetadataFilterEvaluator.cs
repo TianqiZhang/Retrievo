@@ -39,11 +39,27 @@ internal static class MetadataFilterEvaluator
 
                 if (fieldDefinitions.TryGetValue(key, out var fieldDef) && fieldDef.Type == FieldType.StringArray)
                 {
-                    // Contains-match: split stored value by delimiter and check if any element matches
+                    // Contains-match: zero-alloc span scan over delimiter-separated segments
                     bool found = false;
-                    foreach (var segment in docValue.Split(fieldDef.Delimiter, StringSplitOptions.RemoveEmptyEntries))
+                    var span = docValue.AsSpan();
+                    var filter = value.AsSpan();
+
+                    while (span.Length > 0)
                     {
-                        if (string.Equals(segment, value, StringComparison.Ordinal))
+                        int idx = span.IndexOf(fieldDef.Delimiter);
+                        ReadOnlySpan<char> segment;
+                        if (idx < 0)
+                        {
+                            segment = span;
+                            span = ReadOnlySpan<char>.Empty;
+                        }
+                        else
+                        {
+                            segment = span[..idx];
+                            span = span[(idx + 1)..];
+                        }
+
+                        if (segment.Length > 0 && segment.SequenceEqual(filter))
                         {
                             found = true;
                             break;

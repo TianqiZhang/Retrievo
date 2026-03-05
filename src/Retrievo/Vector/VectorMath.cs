@@ -1,16 +1,15 @@
-using System.Numerics;
-using System.Runtime.InteropServices;
+using System.Numerics.Tensors;
 
 namespace Retrievo.Vector;
 
 /// <summary>
 /// SIMD-accelerated vector math utilities for cosine similarity computation.
-/// Uses System.Numerics.Vector&lt;float&gt; for hardware-accelerated dot products.
+/// Uses System.Numerics.Tensors for hardware-accelerated dot products and norms.
 /// </summary>
 internal static class VectorMath
 {
     /// <summary>
-    /// Compute the dot product of two float arrays of equal length using SIMD where possible.
+    /// Compute the dot product of two float arrays of equal length.
     /// Both arrays must be pre-normalized for the result to equal cosine similarity.
     /// </summary>
     public static float DotProduct(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
@@ -18,32 +17,7 @@ internal static class VectorMath
         if (a.Length != b.Length)
             throw new ArgumentException($"Vector dimensions must match: {a.Length} vs {b.Length}");
 
-        float sum = 0f;
-        int i = 0;
-
-        // SIMD path
-        if (System.Numerics.Vector.IsHardwareAccelerated && a.Length >= System.Numerics.Vector<float>.Count)
-        {
-            var spanA = MemoryMarshal.Cast<float, System.Numerics.Vector<float>>(a);
-            var spanB = MemoryMarshal.Cast<float, System.Numerics.Vector<float>>(b);
-
-            var vSum = System.Numerics.Vector<float>.Zero;
-            for (int v = 0; v < spanA.Length; v++)
-            {
-                vSum += spanA[v] * spanB[v];
-            }
-
-            sum = System.Numerics.Vector.Sum(vSum);
-            i = spanA.Length * System.Numerics.Vector<float>.Count;
-        }
-
-        // Scalar remainder
-        for (; i < a.Length; i++)
-        {
-            sum += a[i] * b[i];
-        }
-
-        return sum;
+        return TensorPrimitives.Dot(a, b);
     }
 
     /// <summary>
@@ -51,10 +25,7 @@ internal static class VectorMath
     /// </summary>
     public static float L2Norm(ReadOnlySpan<float> v)
     {
-        float sum = 0f;
-        for (int i = 0; i < v.Length; i++)
-            sum += v[i] * v[i];
-        return MathF.Sqrt(sum);
+        return TensorPrimitives.Norm(v);
     }
 
     /// <summary>
