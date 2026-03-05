@@ -61,3 +61,6 @@ benchmarks/data/
 
 # Embedding cache files (large binary, generated locally)
 *.bin
+
+# BenchmarkDotNet output
+BenchmarkDotNet.Artifacts/

@@ -10,5 +10,6 @@
   </Folder>
   <Folder Name="/benchmarks/">
     <Project Path="benchmarks/Retrievo.Benchmarks/Retrievo.Benchmarks.csproj" />
+    <Project Path="benchmarks/Retrievo.PerfBenchmarks/Retrievo.PerfBenchmarks.csproj" />
   </Folder>
 </Solution>

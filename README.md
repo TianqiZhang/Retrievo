@@ -180,6 +180,25 @@ Default parameters (`LexicalWeight=0.5, VectorWeight=1.0, RrfK=20, TitleBoost=0.
 | Hybrid query (BM25 + vector + RRF) | < 10 ms |
 | Index build (3k docs) | < 2 s |
 
+### Performance Micro-Benchmarks
+
+Hot-path profiling with [BenchmarkDotNet](https://benchmarkdotnet.org/) (.NET 8.0, X64 RyuJIT AVX-512, 384-dim vectors unless noted):
+
+| Hot Path | Current | Best Alternative | Speedup | Technique |
+|----------|---------|-----------------|---------|-----------|
+| Top-K selection (n=5000, k=10) | 483 µs (full sort) | 14.7 µs (min-heap) | **33×** | Min-heap partial sort O(n log k) |
+| Cosine similarity (384-dim) | 1,651 ns (normalize+dot) | 55.5 ns (single-pass) | **30×** | `TensorPrimitives.CosineSimilarity` |
+| Vector validation (768-dim) | 1,238 ns (scalar loop) | 110 ns (dot-self) | **11×** | `TensorPrimitives.Dot` NaN/Inf propagation |
+| L2 norm (384-dim) | 350 ns (scalar) | 44.6 ns (SIMD) | **8×** | `TensorPrimitives.Norm` |
+| Contains filter (10 fields) | 1,692 ns (string.Split) | 368 ns (manual scan) | **4.6×** | Zero-alloc `Span<char>` scanning |
+| RRF accumulation (1000 docs) | 93.6 µs (TryGetValue) | 64.3 µs (ref update) | **1.5×** | `CollectionsMarshal.GetValueRefOrAddDefault` |
+| Metadata lookup (10 fields) | 297 ns (Dictionary) | 187 ns (Frozen) | **1.6×** | `FrozenDictionary<K,V>` |
+| Dot product (384-dim) | 56.2 ns (SIMD) | 47.5 ns (Tensor) | **1.2×** | `TensorPrimitives.Dot` |
+
+Run benchmarks: `dotnet run --project benchmarks/Retrievo.PerfBenchmarks -c Release -- --filter "*"`
+
+Source: [`benchmarks/Retrievo.PerfBenchmarks/`](benchmarks/Retrievo.PerfBenchmarks/)
+
 ---
 
 ## Roadmap
