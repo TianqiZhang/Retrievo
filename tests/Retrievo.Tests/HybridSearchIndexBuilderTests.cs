@@ -51,6 +51,18 @@ public class HybridSearchIndexBuilderTests
     }
 
     [Fact]
+    public void Build_DuplicateIds_Throws()
+    {
+        var builder = new HybridSearchIndexBuilder()
+            .AddDocument(new Document { Id = "doc-1", Body = "first" })
+            .AddDocument(new Document { Id = "doc-1", Body = "second" });
+
+        var ex = Assert.Throws<InvalidOperationException>(() => builder.Build());
+
+        Assert.Contains("Duplicate document ID 'doc-1'", ex.Message);
+    }
+
+    [Fact]
     public void AddFolder_LoadsTextFiles()
     {
         // Create a temp directory with test files
@@ -203,6 +215,28 @@ public class HybridSearchIndexBuilderTests
                 Arg.Is<IReadOnlyList<string>>(texts => texts.Count == 1 && texts[0] == "needs embedding"),
                 Arg.Any<CancellationToken>());
         }
+    }
+
+    [Fact]
+    public async Task BuildAsync_DuplicateIds_ThrowsBeforeEmbedding()
+    {
+        var docs = new List<Document>
+        {
+            new() { Id = "doc-1", Body = "first" },
+            new() { Id = "doc-1", Body = "second" }
+        };
+
+        var mockProvider = Substitute.For<IEmbeddingProvider>();
+        mockProvider.Dimensions.Returns(3);
+
+        var builder = new HybridSearchIndexBuilder()
+            .AddDocuments(docs)
+            .WithEmbeddingProvider(mockProvider);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => builder.BuildAsync());
+
+        Assert.Contains("Duplicate document ID 'doc-1'", ex.Message);
+        _ = mockProvider.DidNotReceive().EmbedBatchAsync(Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]

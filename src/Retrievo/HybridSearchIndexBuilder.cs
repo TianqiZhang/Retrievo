@@ -134,13 +134,15 @@ public sealed class HybridSearchIndexBuilder
         if (_documents.Count == 0)
             throw new InvalidOperationException("Cannot build an index with no documents.");
 
+        DocumentCollectionValidator.ValidateUniqueIds(_documents);
+
         if (_embeddingProvider is not null && _documents.Any(doc => doc.Embedding is null))
             throw new InvalidOperationException("Synchronous Build() cannot generate embeddings for documents. Use BuildAsync(), or provide pre-computed Embedding values on all documents.");
 
         var lexicalRetriever = new LuceneLexicalRetriever();
         var vectorRetriever = new BruteForceVectorRetriever();
         var fuser = _fuser ?? new RrfFuser();
-        var docMap = new Dictionary<string, Document>(_documents.Count);
+        var docMap = new Dictionary<string, Document>(_documents.Count, StringComparer.Ordinal);
 
         int? embeddingDimension = null;
 
@@ -183,13 +185,15 @@ public sealed class HybridSearchIndexBuilder
         if (_documents.Count == 0)
             throw new InvalidOperationException("Cannot build an index with no documents.");
 
+        DocumentCollectionValidator.ValidateUniqueIds(_documents);
+
         // Generate embeddings for documents that don't have them
         await EnsureEmbeddingsAsync(ct).ConfigureAwait(false);
 
         var lexicalRetriever = new LuceneLexicalRetriever();
         var vectorRetriever = new BruteForceVectorRetriever();
         var fuser = _fuser ?? new RrfFuser();
-        var docMap = new Dictionary<string, Document>(_documents.Count);
+        var docMap = new Dictionary<string, Document>(_documents.Count, StringComparer.Ordinal);
 
         int? embeddingDimension = null;
 

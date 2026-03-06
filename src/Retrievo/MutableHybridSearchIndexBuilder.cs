@@ -83,6 +83,8 @@ public sealed class MutableHybridSearchIndexBuilder
     {
         var sw = Stopwatch.StartNew();
 
+        DocumentCollectionValidator.ValidateUniqueIds(_documents);
+
         if (_embeddingProvider is not null && _documents.Any(doc => doc.Embedding is null))
             throw new InvalidOperationException("Synchronous Build() cannot generate embeddings for documents. Use BuildAsync(), or provide pre-computed Embedding values on all documents.");
 
@@ -127,6 +129,8 @@ public sealed class MutableHybridSearchIndexBuilder
     public async Task<MutableHybridSearchIndex> BuildAsync(CancellationToken ct = default)
     {
         var sw = Stopwatch.StartNew();
+
+        DocumentCollectionValidator.ValidateUniqueIds(_documents);
 
         // Generate embeddings for documents that don't have them
         await EnsureEmbeddingsAsync(ct).ConfigureAwait(false);

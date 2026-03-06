@@ -155,19 +155,28 @@ public sealed class LuceneLexicalRetriever : ILexicalRetriever
         ObjectDisposedException.ThrowIf(_disposed, this);
         _writer.Commit();
 
-        var newReader = _reader is null
+        var currentReader = _reader;
+        var newReader = currentReader is null
             ? DirectoryReader.Open(_directory)
-            : DirectoryReader.OpenIfChanged(_reader);
+            : DirectoryReader.OpenIfChanged(currentReader);
 
         if (newReader is not null)
         {
-            if (!ManualRefreshOnly)
+            if (currentReader is not null)
             {
-                // In automatic mode (immutable index), dispose old reader immediately — no concurrent writers.
-                _reader?.Dispose();
+                if (ManualRefreshOnly)
+                {
+                    // Release the retriever-owned reference on the previous reader. Snapshot instances
+                    // keep their own reader reference and release it when the final search lease ends.
+                    ReleaseSearcherSnapshot(currentReader);
+                }
+                else
+                {
+                    // In automatic mode (immutable index), dispose old reader immediately — no concurrent writers.
+                    currentReader.Dispose();
+                }
             }
-            // In ManualRefreshOnly mode (mutable index), old reader is kept alive by snapshot ref-counting.
-            // MutableHybridSearchIndex manages old reader lifecycle via AcquireSearcherSnapshot/ReleaseSearcherSnapshot.
+
             _reader = newReader;
             _searcher = new IndexSearcher(_reader);
             _searcher.Similarity = new BM25Similarity(Bm25K1, Bm25B);

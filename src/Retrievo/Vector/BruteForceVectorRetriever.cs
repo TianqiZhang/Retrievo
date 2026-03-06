@@ -114,6 +114,8 @@ public sealed class BruteForceVectorRetriever : IVectorRetriever
             if (string.Equals(_entries[i].Id, id, StringComparison.Ordinal))
             {
                 _entries.RemoveAt(i);
+                if (_entries.Count == 0)
+                    Dimensions = 0;
                 return true;
             }
         }

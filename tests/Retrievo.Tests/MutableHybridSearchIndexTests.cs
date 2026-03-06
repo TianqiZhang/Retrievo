@@ -1,5 +1,8 @@
+using System.Collections.Concurrent;
+using Retrievo.Abstractions;
 using Retrievo.Models;
 using Retrievo.Tests.TestData;
+using NSubstitute;
 
 namespace Retrievo.Tests;
 
@@ -238,6 +241,61 @@ public class MutableHybridSearchIndexTests
     }
 
     [Fact]
+    public void Delete_LastVector_ThenCommit_ResetsEmbeddingDimension()
+    {
+        using var index = new MutableHybridSearchIndexBuilder()
+            .AddDocument(new Document
+            {
+                Id = "doc-1",
+                Body = "Some text content.",
+                Embedding = new float[] { 1f, 0f }
+            })
+            .Build();
+
+        Assert.Equal(2, index.GetStats().EmbeddingDimension);
+
+        index.Delete("doc-1");
+        index.Commit();
+
+        Assert.Null(index.GetStats().EmbeddingDimension);
+    }
+
+    [Fact]
+    public void Delete_LastVector_ThenCommit_AllowsDifferentEmbeddingDimension()
+    {
+        using var index = new MutableHybridSearchIndexBuilder()
+            .AddDocument(new Document
+            {
+                Id = "doc-1",
+                Body = "First document.",
+                Embedding = new float[] { 1f, 0f }
+            })
+            .Build();
+
+        index.Delete("doc-1");
+        index.Commit();
+
+        index.Upsert(new Document
+        {
+            Id = "doc-2",
+            Body = "Second document.",
+            Embedding = new float[] { 1f, 0f, 0f }
+        });
+        index.Commit();
+
+        Assert.Equal(3, index.GetStats().EmbeddingDimension);
+
+        var response = index.Search(new HybridQuery
+        {
+            Vector = new float[] { 1f, 0f, 0f },
+            TopK = 5
+        });
+
+        Assert.Single(response.Results);
+        Assert.Equal("doc-2", response.Results[0].Id);
+    }
+
+    [Fact]
     public void Builder_SeedsInitialDocuments()
     {
         var docs = SyntheticCorpusGenerator.GenerateSmall();
@@ -250,6 +308,40 @@ public class MutableHybridSearchIndexTests
 
         var response = index.Search(new HybridQuery { Text = "neural network", TopK = 5 });
         Assert.NotNull(response);
+    }
+
+    [Fact]
+    public void Build_DuplicateIds_Throws()
+    {
+        var builder = new MutableHybridSearchIndexBuilder()
+            .AddDocument(new Document { Id = "doc-1", Body = "first" })
+            .AddDocument(new Document { Id = "doc-1", Body = "second" });
+
+        var ex = Assert.Throws<InvalidOperationException>(() => builder.Build());
+
+        Assert.Contains("Duplicate document ID 'doc-1'", ex.Message);
+    }
+
+    [Fact]
+    public async Task BuildAsync_DuplicateIds_ThrowsBeforeEmbedding()
+    {
+        var docs = new List<Document>
+        {
+            new() { Id = "doc-1", Body = "first" },
+            new() { Id = "doc-1", Body = "second" }
+        };
+
+        var mockProvider = Substitute.For<IEmbeddingProvider>();
+        mockProvider.Dimensions.Returns(3);
+
+        var builder = new MutableHybridSearchIndexBuilder()
+            .AddDocuments(docs)
+            .WithEmbeddingProvider(mockProvider);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => builder.BuildAsync());
+
+        Assert.Contains("Duplicate document ID 'doc-1'", ex.Message);
+        _ = mockProvider.DidNotReceive().EmbedBatchAsync(Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -331,6 +423,57 @@ public class MutableHybridSearchIndexTests
 
         Assert.NotNull(response);
         Assert.Single(response.Results);
+    }
+
+    [Fact]
+    public async Task ConcurrentSearchAndCommit_DoesNotCloseSnapshotReaders()
+    {
+        using var index = new MutableHybridSearchIndexBuilder()
+            .AddDocument(new Document { Id = "seed", Body = "alpha beta gamma" })
+            .Build();
+
+        using var cts = new CancellationTokenSource();
+        var failures = new ConcurrentQueue<Exception>();
+
+        var searchTasks = Enumerable.Range(0, 4)
+            .Select(_ => Task.Run(() =>
+            {
+                try
+                {
+                    while (!cts.Token.IsCancellationRequested)
+                    {
+                        var response = index.Search(new HybridQuery { Text = "alpha", TopK = 5 });
+                        if (response.Results.Count == 0)
+                            throw new InvalidOperationException("Expected search results during concurrent commit test.");
+                    }
+                }
+                catch (OperationCanceledException) when (cts.Token.IsCancellationRequested)
+                {
+                }
+                catch (Exception ex)
+                {
+                    failures.Enqueue(ex);
+                    cts.Cancel();
+                }
+            }))
+            .ToArray();
+
+        try
+        {
+            for (int i = 0; i < 200 && !cts.Token.IsCancellationRequested; i++)
+            {
+                index.Upsert(new Document { Id = $"doc-{i}", Body = $"alpha document {i}" });
+                index.Commit();
+            }
+        }
+        finally
+        {
+            cts.Cancel();
+        }
+
+        await Task.WhenAll(searchTasks);
+
+        Assert.Empty(failures);
     }
 
     [Fact]

@@ -139,6 +139,19 @@ public class BruteForceVectorRetrieverTests
     }
 
     [Fact]
+    public void Remove_LastEntry_ResetsDimensions()
+    {
+        var retriever = new BruteForceVectorRetriever();
+        retriever.Add("doc-1", new float[] { 1f, 0f });
+
+        bool removed = retriever.Remove("doc-1");
+
+        Assert.True(removed);
+        Assert.Equal(0, retriever.Count);
+        Assert.Equal(0, retriever.Dimensions);
+    }
+
+    [Fact]
     public void Add_NaNEmbedding_Throws()
     {
         var retriever = new BruteForceVectorRetriever();

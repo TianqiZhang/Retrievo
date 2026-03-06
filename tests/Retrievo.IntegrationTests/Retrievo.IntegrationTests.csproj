@@ -13,6 +13,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Retrievo.Cli\Retrievo.Cli.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\src\Retrievo\Retrievo.csproj" />
     <ProjectReference Include="..\..\src\Retrievo.AzureOpenAI\Retrievo.AzureOpenAI.csproj" />
   </ItemGroup>

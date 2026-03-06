@@ -128,9 +128,6 @@ public sealed class MutableHybridSearchIndex : IMutableHybridSearchIndex
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        // Capture old snapshot before refresh so we can release its reader
-        var oldSnapshot = _snapshot;
-
         // Refresh the Lucene searcher to see all pending writes
         _lexicalRetriever.RefreshSearcher();
 
@@ -141,14 +138,9 @@ public sealed class MutableHybridSearchIndex : IMutableHybridSearchIndex
             IndexBuildTimeMs = 0
         };
 
-        // Atomically swap the snapshot
-        _snapshot = CreateSnapshot(stats);
-
-        // Release old snapshot's reader (DecRef — when refcount hits 0, Lucene closes it)
-        if (oldSnapshot.Reader is not null)
-        {
-            LuceneLexicalRetriever.ReleaseSearcherSnapshot(oldSnapshot.Reader);
-        }
+        var newSnapshot = CreateSnapshot(stats);
+        var oldSnapshot = Interlocked.Exchange(ref _snapshot, newSnapshot);
+        oldSnapshot.Release();
     }
 
     /// <summary>
@@ -169,16 +161,23 @@ public sealed class MutableHybridSearchIndex : IMutableHybridSearchIndex
         query.ValidateBoosts();
 
         var totalSw = Stopwatch.StartNew();
-        var snapshot = _snapshot; // Read volatile once
+        var snapshot = AcquireSnapshot();
 
-        float[]? queryVector = query.Vector;
-        double? embeddingTimeMs = null;
-        if (queryVector is null && query.Text is not null && _embeddingProvider is not null)
+        try
         {
-            throw new InvalidOperationException("Synchronous Search() cannot generate embeddings for query text. Use SearchAsync(), or provide a pre-computed Vector in the HybridQuery.");
-        }
+            float[]? queryVector = query.Vector;
+            double? embeddingTimeMs = null;
+            if (queryVector is null && query.Text is not null && _embeddingProvider is not null)
+            {
+                throw new InvalidOperationException("Synchronous Search() cannot generate embeddings for query text. Use SearchAsync(), or provide a pre-computed Vector in the HybridQuery.");
+            }
 
-        return ExecuteSearch(query, queryVector, embeddingTimeMs, snapshot, totalSw, CancellationToken.None);
+            return ExecuteSearch(query, queryVector, embeddingTimeMs, snapshot, totalSw, CancellationToken.None);
+        }
+        finally
+        {
+            snapshot.Release();
+        }
     }
 
     /// <inheritdoc/>
@@ -189,19 +188,26 @@ public sealed class MutableHybridSearchIndex : IMutableHybridSearchIndex
         query.ValidateBoosts();
 
         var totalSw = Stopwatch.StartNew();
-        var snapshot = _snapshot; // Read volatile once
+        var snapshot = AcquireSnapshot();
 
-        float[]? queryVector = query.Vector;
-        double? embeddingTimeMs = null;
-        if (queryVector is null && query.Text is not null && _embeddingProvider is not null)
+        try
         {
-            var embedSw = Stopwatch.StartNew();
-            queryVector = await _embeddingProvider.EmbedAsync(query.Text, ct).ConfigureAwait(false);
-            embedSw.Stop();
-            embeddingTimeMs = embedSw.Elapsed.TotalMilliseconds;
-        }
+            float[]? queryVector = query.Vector;
+            double? embeddingTimeMs = null;
+            if (queryVector is null && query.Text is not null && _embeddingProvider is not null)
+            {
+                var embedSw = Stopwatch.StartNew();
+                queryVector = await _embeddingProvider.EmbedAsync(query.Text, ct).ConfigureAwait(false);
+                embedSw.Stop();
+                embeddingTimeMs = embedSw.Elapsed.TotalMilliseconds;
+            }
 
-        return ExecuteSearch(query, queryVector, embeddingTimeMs, snapshot, totalSw, ct);
+            return ExecuteSearch(query, queryVector, embeddingTimeMs, snapshot, totalSw, ct);
+        }
+        finally
+        {
+            snapshot.Release();
+        }
     }
 
     /// <inheritdoc/>
@@ -379,14 +385,25 @@ public sealed class MutableHybridSearchIndex : IMutableHybridSearchIndex
     {
         if (!_disposed)
         {
-            // Release the current snapshot's reader before disposing the retriever
-            if (_snapshot.Reader is not null)
-            {
-                LuceneLexicalRetriever.ReleaseSearcherSnapshot(_snapshot.Reader);
-            }
-
-            _lexicalRetriever.Dispose();
             _disposed = true;
+            _snapshot.Release();
+            _lexicalRetriever.Dispose();
+        }
+    }
+
+    private SearchSnapshot AcquireSnapshot()
+    {
+        var spinWait = new SpinWait();
+
+        while (true)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+
+            var snapshot = _snapshot;
+            if (snapshot.TryAddRef())
+                return snapshot;
+
+            spinWait.SpinOnce();
         }
     }
 
@@ -396,6 +413,8 @@ public sealed class MutableHybridSearchIndex : IMutableHybridSearchIndex
     /// </summary>
     private sealed class SearchSnapshot
     {
+        private int _refCount = 1;
+
         public IReadOnlyDictionary<string, Document> Documents { get; }
         public IReadOnlyList<(string Id, float[] NormalizedEmbedding)> VectorEntries { get; }
         public IndexStats Stats { get; }
@@ -414,6 +433,27 @@ public sealed class MutableHybridSearchIndex : IMutableHybridSearchIndex
             Stats = stats;
             Searcher = searcher;
             Reader = reader;
+        }
+
+        public bool TryAddRef()
+        {
+            while (true)
+            {
+                int refCount = Volatile.Read(ref _refCount);
+                if (refCount == 0)
+                    return false;
+
+                if (Interlocked.CompareExchange(ref _refCount, refCount + 1, refCount) == refCount)
+                    return true;
+            }
+        }
+
+        public void Release()
+        {
+            if (Interlocked.Decrement(ref _refCount) == 0 && Reader is not null)
+            {
+                LuceneLexicalRetriever.ReleaseSearcherSnapshot(Reader);
+            }
         }
     }
 }
