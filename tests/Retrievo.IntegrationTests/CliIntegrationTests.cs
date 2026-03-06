@@ -29,10 +29,23 @@ public class CliIntegrationTests : IDisposable
             "# Security Best Practices\nEncryption protects sensitive data at rest and in transit. " +
             "Authentication verifies user identity with credentials.");
 
-        // Resolve CLI output path relative to test assembly
+        // Derive the active configuration and TFM from the current test assembly output path
+        // so these tests work under both Debug/Release and future target framework changes.
         var assemblyDir = Path.GetDirectoryName(typeof(CliIntegrationTests).Assembly.Location)!;
-        // Navigate from tests/Retrievo.IntegrationTests/bin/Debug/net8.0 up to repo root
-        _cliDllPath = Path.GetFullPath(Path.Combine(assemblyDir, "..", "..", "..", "..", "..", "src", "Retrievo.Cli", "bin", "Debug", "net8.0", "Retrievo.Cli.dll"));
+        var targetFramework = new DirectoryInfo(assemblyDir).Name;
+        var configurationDir = Directory.GetParent(assemblyDir)
+            ?? throw new InvalidOperationException($"Could not determine build configuration from '{assemblyDir}'.");
+        var configuration = configurationDir.Name;
+        var repoRoot = Path.GetFullPath(Path.Combine(assemblyDir, "..", "..", "..", "..", ".."));
+
+        _cliDllPath = Path.Combine(repoRoot, "src", "Retrievo.Cli", "bin", configuration, targetFramework, "Retrievo.Cli.dll");
+
+        if (!File.Exists(_cliDllPath))
+        {
+            throw new FileNotFoundException(
+                $"CLI assembly not found at '{_cliDllPath}'. Ensure the integration test project builds the CLI for configuration '{configuration}' and target framework '{targetFramework}' before running tests.",
+                _cliDllPath);
+        }
     }
 
     /// <summary>

@@ -203,6 +203,7 @@ dotnet test
 ```
 
 238 tests covering retrieval, vector math, fusion, mutable index, filters, field definitions, cancellation, and CLI integration — 0 warnings.
+CLI integration tests build the CLI project and execute the matching built artifact for the active configuration/TFM, so `dotnet test tests/Retrievo.IntegrationTests` works from a clean checkout.
 
 ## Known Limitations
 
