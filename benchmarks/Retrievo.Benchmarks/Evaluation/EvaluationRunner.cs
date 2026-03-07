@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Retrievo.Abstractions;
 using Retrievo.Models;
 
 namespace Retrievo.Benchmarks.Evaluation;
@@ -11,7 +12,8 @@ public sealed class EvaluationRunner : IDisposable
     private readonly IReadOnlyDictionary<string, string> _queries;
     private readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, int>> _qrels;
     private readonly IReadOnlyDictionary<string, float[]>? _embeddings;
-    private readonly HybridSearchIndex _index;
+    private readonly IHybridSearchIndex _index;
+    private readonly bool _disposeIndex;
     private bool _disposed;
 
     /// <summary>
@@ -26,21 +28,42 @@ public sealed class EvaluationRunner : IDisposable
         IReadOnlyDictionary<string, string> queries,
         IReadOnlyDictionary<string, IReadOnlyDictionary<string, int>> qrels,
         IReadOnlyDictionary<string, float[]>? embeddings = null)
+        : this(
+            BuildIndex(documents),
+            queries,
+            qrels,
+            embeddings,
+            disposeIndex: true)
     {
-        ArgumentNullException.ThrowIfNull(documents);
+    }
+
+    /// <summary>
+    /// Initialize a new evaluation runner for an existing index instance.
+    /// </summary>
+    /// <param name="index">Search index to evaluate.</param>
+    /// <param name="queries">Query text keyed by query ID.</param>
+    /// <param name="qrels">Relevance judgments keyed by query ID.</param>
+    /// <param name="embeddings">Optional embedding dictionary keyed by ID (documents and queries).</param>
+    /// <param name="disposeIndex">Whether the runner should dispose the supplied index when disposed.</param>
+    public EvaluationRunner(
+        IHybridSearchIndex index,
+        IReadOnlyDictionary<string, string> queries,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, int>> qrels,
+        IReadOnlyDictionary<string, float[]>? embeddings = null,
+        bool disposeIndex = false)
+    {
+        ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(queries);
         ArgumentNullException.ThrowIfNull(qrels);
 
-        if (documents.Count == 0)
+        if (index.GetStats().DocumentCount == 0)
             throw new InvalidOperationException("Cannot evaluate with an empty corpus.");
 
+        _index = index;
         _queries = queries;
         _qrels = qrels;
         _embeddings = embeddings;
-
-        _index = new HybridSearchIndexBuilder()
-            .AddDocuments(documents)
-            .Build();
+        _disposeIndex = disposeIndex;
     }
 
     /// <summary>
@@ -48,7 +71,14 @@ public sealed class EvaluationRunner : IDisposable
     /// </summary>
     /// <param name="config">Evaluation configuration.</param>
     /// <returns>Aggregated evaluation metrics and timing.</returns>
-    public EvaluationResult Run(EvaluationConfig config)
+    public EvaluationResult Run(EvaluationConfig config) => RunDetailed(config).Summary;
+
+    /// <summary>
+    /// Run evaluation with the specified configuration and capture per-query rankings.
+    /// </summary>
+    /// <param name="config">Evaluation configuration.</param>
+    /// <returns>Aggregated evaluation metrics, timing, and per-query ranked outputs.</returns>
+    public EvaluationRun RunDetailed(EvaluationConfig config)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(config);
@@ -68,6 +98,7 @@ public sealed class EvaluationRunner : IDisposable
         var recallTotal = 0d;
         var queryTimeTotalMs = 0d;
         var queryCount = 0;
+        var queryResults = new Dictionary<string, QueryEvaluationResult>(StringComparer.Ordinal);
 
         foreach (var (queryId, qrelForQuery) in _qrels)
         {
@@ -81,7 +112,7 @@ public sealed class EvaluationRunner : IDisposable
                     continue;
             }
 
-            var queryForAt10 = new HybridQuery
+            var queryForTopK = new HybridQuery
             {
                 Text = config.UseLexical ? queryText : null,
                 Vector = config.UseVector ? queryVector : null,
@@ -94,21 +125,27 @@ public sealed class EvaluationRunner : IDisposable
                 TitleBoost = config.TitleBoost
             };
 
-            var responseAt10 = _index.Search(queryForAt10);
-            queryTimeTotalMs += responseAt10.QueryTimeMs;
+            var responseAtTopK = _index.Search(queryForTopK);
+            queryTimeTotalMs += responseAtTopK.QueryTimeMs;
 
-            var rankedAt10 = responseAt10.Results.Select(result => result.Id).ToList();
+            var rankedAtTopK = responseAtTopK.Results.Select(result => result.Id).ToList();
 
-            var queryForRecall = queryForAt10 with { TopK = Math.Max(config.RecallAtK, config.TopK) };
-            var responseForRecall = queryForAt10.TopK >= config.RecallAtK
-                ? responseAt10
+            var queryForRecall = queryForTopK with { TopK = Math.Max(config.RecallAtK, config.TopK) };
+            var responseForRecall = queryForTopK.TopK >= config.RecallAtK
+                ? responseAtTopK
                 : _index.Search(queryForRecall);
 
             var rankedForRecall = responseForRecall.Results.Select(result => result.Id).ToList();
 
-            ndcgTotal += NdcgCalculator.ComputeNdcg(rankedAt10, qrelForQuery, config.TopK);
-            mapTotal += NdcgCalculator.ComputeAveragePrecision(rankedAt10, qrelForQuery, config.TopK);
+            ndcgTotal += NdcgCalculator.ComputeNdcg(rankedAtTopK, qrelForQuery, config.TopK);
+            mapTotal += NdcgCalculator.ComputeAveragePrecision(rankedAtTopK, qrelForQuery, config.TopK);
             recallTotal += NdcgCalculator.ComputeRecall(rankedForRecall, qrelForQuery, config.RecallAtK);
+            queryResults.Add(queryId, new QueryEvaluationResult
+            {
+                QueryId = queryId,
+                RankedAtTopK = rankedAtTopK,
+                RankedAtRecallK = rankedForRecall
+            });
             queryCount++;
         }
 
@@ -117,14 +154,18 @@ public sealed class EvaluationRunner : IDisposable
         if (queryCount == 0)
             throw new InvalidOperationException($"Configuration '{config.Name}' evaluated zero queries.");
 
-        return new EvaluationResult
+        return new EvaluationRun
         {
-            Name = config.Name,
-            NdcgAt10 = ndcgTotal / queryCount,
-            MapAt10 = mapTotal / queryCount,
-            RecallAt100 = recallTotal / queryCount,
-            AvgQueryTimeMs = queryTimeTotalMs / queryCount,
-            TotalTimeMs = totalTimer.Elapsed.TotalMilliseconds
+            Summary = new EvaluationResult
+            {
+                Name = config.Name,
+                NdcgAt10 = ndcgTotal / queryCount,
+                MapAt10 = mapTotal / queryCount,
+                RecallAt100 = recallTotal / queryCount,
+                AvgQueryTimeMs = queryTimeTotalMs / queryCount,
+                TotalTimeMs = totalTimer.Elapsed.TotalMilliseconds
+            },
+            QueryResults = queryResults
         };
     }
 
@@ -136,8 +177,22 @@ public sealed class EvaluationRunner : IDisposable
         if (_disposed)
             return;
 
-        _index.Dispose();
+        if (_disposeIndex)
+            _index.Dispose();
+
         _disposed = true;
+    }
+
+    private static HybridSearchIndex BuildIndex(IReadOnlyList<Document> documents)
+    {
+        ArgumentNullException.ThrowIfNull(documents);
+
+        if (documents.Count == 0)
+            throw new InvalidOperationException("Cannot evaluate with an empty corpus.");
+
+        return new HybridSearchIndexBuilder()
+            .AddDocuments(documents)
+            .Build();
     }
 }
 
@@ -236,4 +291,41 @@ public sealed record EvaluationResult
     /// End-to-end elapsed time in milliseconds.
     /// </summary>
     public required double TotalTimeMs { get; init; }
+}
+
+/// <summary>
+/// Detailed evaluation output for a single configuration, including per-query rankings.
+/// </summary>
+public sealed record EvaluationRun
+{
+    /// <summary>
+    /// Aggregated metrics and timing for the configuration.
+    /// </summary>
+    public required EvaluationResult Summary { get; init; }
+
+    /// <summary>
+    /// Per-query ranked results used to compute the aggregate metrics.
+    /// </summary>
+    public required IReadOnlyDictionary<string, QueryEvaluationResult> QueryResults { get; init; }
+}
+
+/// <summary>
+/// Ranked retrieval outputs captured for a single query.
+/// </summary>
+public sealed record QueryEvaluationResult
+{
+    /// <summary>
+    /// Query identifier.
+    /// </summary>
+    public required string QueryId { get; init; }
+
+    /// <summary>
+    /// Ranked document IDs at the main evaluation cutoff.
+    /// </summary>
+    public required IReadOnlyList<string> RankedAtTopK { get; init; }
+
+    /// <summary>
+    /// Ranked document IDs at the recall cutoff.
+    /// </summary>
+    public required IReadOnlyList<string> RankedAtRecallK { get; init; }
 }

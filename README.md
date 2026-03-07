@@ -52,6 +52,8 @@ Measured on BEIR datasets with `text-embedding-3-small` (1536-dim) embeddings:
 | Hybrid (BM25 + vector + RRF) | 2.2 ms | 3.3 ms |
 
 Details: [`benchmarks/`](benchmarks/)
+The benchmark harness can also export a temporary snapshot, re-import it, and assert identical ranked outputs per query with `--verify-snapshot-roundtrip`.
+Micro-benchmark timings are hardware-dependent; the current vector math measurements live in [`benchmarks/README.md`](benchmarks/README.md).
 
 ---
 
@@ -69,12 +71,13 @@ Details: [`benchmarks/`](benchmarks/)
 ### Index Management
 - **Fluent Builder**: Clean API for batch construction and folder ingestion.
 - **Mutable Index**: Incremental upserts and deletes with thread-safe commits.
+- **Snapshot Export/Import**: Persist versioned JSON snapshots and reload indexes without rescanning source files.
 - **Unique Document IDs**: Builders reject duplicate document IDs within a single build.
 - **Zero Infrastructure**: Runs entirely in-process with no external dependencies.
 - **Auto-Embedding**: Transparently embed documents at index time.
 
 ### Developer Experience
-- **SIMD Accelerated**: `TensorPrimitives`-backed vector math with min-heap top-K selection.
+- **Deterministic Vector Math**: Memory-layout-independent cosine scoring with SIMD-aware accumulation and min-heap top-K selection.
 - **Query Diagnostics**: Detailed timing breakdown for every pipeline stage.
 - **Pluggable Providers**: Easy integration with any embedding model or API.
 - **CLI Tool**: Powerful terminal interface for indexing and querying.
@@ -145,6 +148,46 @@ var response = index.Search(new HybridQuery
 });
 ```
 
+### Snapshot Export and Import
+
+Persist a built index to a versioned JSON snapshot and reload it later without rescanning files or regenerating stored embeddings:
+
+```csharp
+using var index = await new HybridSearchIndexBuilder()
+    .AddFolder("./docs")
+    .WithEmbeddingProvider(provider)
+    .BuildAsync();
+
+await index.ExportSnapshotAsync("./docs.retrievo.json");
+
+using var restored = await HybridSearchIndex.ImportSnapshotAsync("./docs.retrievo.json");
+var response = restored.Search(new HybridQuery { Text = "how to deploy", TopK = 5 });
+```
+
+Mutable indexes export the last committed snapshot only. Call `Commit()` before exporting pending changes.
+Snapshots persist the live normalized vector state, so round-tripped vector rankings stay identical.
+
+Built-in `RrfFuser` snapshots import directly. If you use a custom `IFuser`, supply the same fuser again during import so ranking semantics are preserved:
+
+```csharp
+using var restored = HybridSearchIndex.ImportSnapshot(
+    "./docs.retrievo.json",
+    fuser: new MyCustomFuser());
+```
+
+The CLI supports built-in `RrfFuser` snapshots directly.
+
+```shell
+retrievo export ./docs --output ./docs.retrievo.json
+retrievo query ./docs.retrievo.json --text "neural network"
+```
+
+For end-to-end snapshot parity checks against the checked-in BEIR benchmark fixtures:
+
+```shell
+dotnet run --project benchmarks/Retrievo.Benchmarks -- --dataset nfcorpus --embeddings benchmarks/fixtures/embeddings/nfcorpus.text-embedding-3-small.cache --verify-snapshot-roundtrip
+```
+
 ---
 
 ## Architecture
@@ -188,7 +231,7 @@ HybridQuery
 |-------|--------|-------------|
 | **Phase 1** | Done | MVP hybrid retrieval, CLI, Azure OpenAI provider |
 | **Phase 2** | Done | Mutable index, fielded search, filters (exact, range, contains), field definitions, diagnostics |
-| **Phase 3** | Planned | Snapshot export and import |
+| **Phase 3** | Done | Snapshot export and import |
 | **Phase 4** | Planned | ANN support for larger corpora |
 
 ---
@@ -202,7 +245,7 @@ dotnet build
 dotnet test
 ```
 
-238 tests covering retrieval, vector math, fusion, mutable index, filters, field definitions, cancellation, and CLI integration — 0 warnings.
+259 tests covering retrieval, vector math, fusion, mutable index, snapshot persistence, filters, field definitions, cancellation, and CLI integration — 0 warnings.
 CLI integration tests build the CLI project and execute the matching built artifact for the active configuration/TFM, so `dotnet test tests/Retrievo.IntegrationTests` works from a clean checkout.
 
 ## Known Limitations
@@ -210,7 +253,7 @@ CLI integration tests build the CLI project and execute the matching built artif
 - **Lexical (BM25) search is English-only**: The lexical retrieval pipeline uses `EnglishStemAnalyzer` (StandardTokenizer → EnglishPossessiveFilter → LowerCaseFilter → English StopWords → PorterStemmer). Non-English text will not be properly tokenized or stemmed for BM25 matching.
 - **Vector search is language-agnostic**: Semantic search works with any language supported by your embedding model (e.g., multilingual embeddings). Hybrid search inherits the English-only limitation for its lexical component.
 - **Brute-force vector search is O(n) per query**: Designed for corpora up to ~10k documents. For larger corpora, consider ANN-based solutions (planned for Phase 4).
-- **In-memory only**: No persistence or crash recovery. The index must be rebuilt from source documents on each application start.
+- **Manual persistence**: Indexes stay in-memory at runtime. Durability is explicit via snapshot export/import; there is no automatic crash recovery or write-ahead log.
 - **No concurrent writers on `HybridSearchIndex`**: The immutable index is built once via the builder. Use `MutableHybridSearchIndex` for incremental upserts and deletes.
 - **Single-process**: No distributed or shared index support. The index lives in a single process's memory.
 - **Workaround for non-English corpora**: Use vector-only search by omitting lexical configuration, or configure a custom analyzer for your language in a fork.

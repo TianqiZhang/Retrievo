@@ -104,7 +104,7 @@ public class CliIntegrationTests : IDisposable
             $"query \"{nonExistent}\" --text \"test\"");
 
         Assert.Equal(1, exitCode);
-        Assert.Contains("Folder not found", stderr);
+        Assert.Contains("Input not found", stderr);
     }
 
     /// <summary>
@@ -118,6 +118,47 @@ public class CliIntegrationTests : IDisposable
 
         Assert.Equal(0, exitCode);
         Assert.Contains("lexical-only mode", stderr);
+    }
+
+    /// <summary>
+    /// CLI can export a snapshot and query it later.
+    /// </summary>
+    [Fact]
+    public async Task CliExport_ThenQuerySnapshot_Works()
+    {
+        var snapshotPath = Path.Combine(_testDocsFolder, "snapshot.retrievo.json");
+
+        var (exportExitCode, exportStdout, exportStderr) = await RunCliAsync(
+            $"export \"{_testDocsFolder}\" --output \"{snapshotPath}\"");
+
+        Assert.Equal(0, exportExitCode);
+        Assert.Contains("Exported snapshot", exportStdout);
+        Assert.True(File.Exists(snapshotPath));
+        Assert.Contains("Indexing files from", exportStderr);
+
+        var (queryExitCode, queryStdout, queryStderr) = await RunCliAsync(
+            $"query \"{snapshotPath}\" --text \"neural network\"");
+
+        Assert.Equal(0, queryExitCode);
+        Assert.Contains("Found", queryStdout);
+        Assert.Contains("machine-learning.md", queryStdout);
+        Assert.Contains("Loading snapshot from", queryStderr);
+    }
+
+    /// <summary>
+    /// CLI query reports invalid snapshot files with a non-zero exit code.
+    /// </summary>
+    [Fact]
+    public async Task CliQuery_InvalidSnapshot_ExitCode1()
+    {
+        var snapshotPath = Path.Combine(_testDocsFolder, "invalid.retrievo.json");
+        await File.WriteAllTextAsync(snapshotPath, "{ not valid json }");
+
+        var (exitCode, _, stderr) = await RunCliAsync(
+            $"query \"{snapshotPath}\" --text \"neural network\"");
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Invalid snapshot JSON", stderr);
     }
 
     private async Task<(int ExitCode, string Stdout, string Stderr)> RunCliAsync(string arguments)

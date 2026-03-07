@@ -25,6 +25,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Retrievo.Tests" />
+    <InternalsVisibleTo Include="Retrievo.PerfBenchmarks" />
   </ItemGroup>
 
 </Project>

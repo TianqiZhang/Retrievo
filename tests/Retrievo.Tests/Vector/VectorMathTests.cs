@@ -75,4 +75,33 @@ public class VectorMathTests
         float dot = VectorMath.DotProduct(aN, bN);
         Assert.Equal(1.0f, dot, tolerance: 1e-5f);
     }
+
+    [Fact]
+    public void DotProduct_SameValuesWithDifferentSpanAlignment_ReturnsSameBits()
+    {
+        const int dims = 1536;
+        var left = new float[dims];
+        var right = new float[dims];
+
+        for (var i = 0; i < dims; i++)
+        {
+            left[i] = (float)Math.Sin(i * 0.17);
+            right[i] = (float)Math.Cos(i * 0.11);
+        }
+
+        var direct = VectorMath.DotProduct(left, right);
+
+        var shiftedLeft = new float[dims + 1];
+        var shiftedRight = new float[dims + 2];
+        Array.Copy(left, 0, shiftedLeft, 1, dims);
+        Array.Copy(right, 0, shiftedRight, 2, dims);
+
+        var shifted = VectorMath.DotProduct(
+            shiftedLeft.AsSpan(1, dims),
+            shiftedRight.AsSpan(2, dims));
+
+        Assert.Equal(
+            BitConverter.SingleToInt32Bits(direct),
+            BitConverter.SingleToInt32Bits(shifted));
+    }
 }

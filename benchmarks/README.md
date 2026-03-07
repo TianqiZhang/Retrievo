@@ -28,6 +28,9 @@ dotnet run --project benchmarks/Retrievo.Benchmarks -- --dataset scifact
 # Run with precomputed embeddings (enables vector-only and hybrid modes)
 dotnet run --project benchmarks/Retrievo.Benchmarks -- --dataset scifact --embeddings scifact-embeddings.bin
 
+# Verify snapshot export/import parity against the checked-in fixture cache
+dotnet run --project benchmarks/Retrievo.Benchmarks -- --dataset nfcorpus --embeddings benchmarks/fixtures/embeddings/nfcorpus.text-embedding-3-small.cache --verify-snapshot-roundtrip
+
 # List all available datasets
 dotnet run --project benchmarks/Retrievo.Benchmarks -- --list-datasets
 ```
@@ -41,7 +44,28 @@ dotnet run --project benchmarks/Retrievo.Benchmarks -- --list-datasets
 | `--embeddings` | | (none) | Path to pre-computed embeddings binary cache |
 | `--list-datasets` | | | Show available datasets and exit |
 | `--sweep` | | | Run parameter sweep over fusion weights, RRF k, and title boost |
+| `--verify-snapshot-roundtrip` | | | Export a temporary snapshot, re-import it, and assert identical ranked outputs and metrics |
 | `--help` | `-h` | | Show usage and exit |
+
+### Snapshot Round-Trip Verification
+
+Use `--verify-snapshot-roundtrip` to prove snapshot export/import preserves retrieval behavior exactly. The benchmark harness:
+
+1. Builds the index from the BEIR corpus.
+2. Exports a temporary snapshot to disk.
+3. Imports that snapshot into a fresh index.
+4. Re-runs the same benchmark configurations.
+5. Compares exact ranked document IDs per query at both the main cutoff and `Recall@100`, plus aggregate `nDCG@10`, `MAP@10`, and `Recall@100`.
+
+Query latency is reported for the original and restored indexes, but it is informational only and not treated as a failure condition.
+
+```bash
+# Standard benchmark parity check
+dotnet run --project benchmarks/Retrievo.Benchmarks -- --dataset nfcorpus --embeddings benchmarks/fixtures/embeddings/nfcorpus.text-embedding-3-small.cache --verify-snapshot-roundtrip
+
+# Full sweep parity check
+dotnet run --project benchmarks/Retrievo.Benchmarks -- --dataset scifact --embeddings benchmarks/fixtures/embeddings/scifact.text-embedding-3-small.cache --verify-snapshot-roundtrip --sweep
+```
 
 ## Generating Embeddings
 
@@ -161,19 +185,27 @@ Each dataset is evaluated in up to three modes: lexical-only (BM25), vector-only
 
 ## Performance Micro-Benchmarks
 
-Hot-path profiling with [BenchmarkDotNet](https://benchmarkdotnet.org/) (.NET 8.0, X64 RyuJIT AVX-512, 384-dim vectors unless noted):
+Historical hot-path profiling with [BenchmarkDotNet](https://benchmarkdotnet.org/) (.NET 8.0, X64 RyuJIT AVX-512, 384-dim vectors unless noted):
 
 | Hot Path | Speedup | Technique | Applied |
 |----------|---------|-----------|---------|
 | Top-K selection (n=5000, k=10) | **33×** | Min-heap partial sort O(n log k) | ✅ |
 | Vector validation (768-dim) | **11×** | `TensorPrimitives.Dot` NaN/Inf propagation | ✅ |
-| L2 norm (384-dim) | **8×** | `TensorPrimitives.Norm` | ✅ |
 | Contains filter (10 fields) | **4.6×** | Zero-alloc `Span<char>` scanning | ✅ |
 | Metadata lookup (10 fields) | **1.6×** | `FrozenDictionary<K,V>` | Deferred |
 | RRF accumulation (1000 docs) | **1.5×** | `CollectionsMarshal.GetValueRefOrAddDefault` | ✅ |
-| Dot product (384-dim) | **1.2×** | `TensorPrimitives.Dot` | ✅ |
 
 Cosine similarity benchmark (30×) is not listed because vectors are pre-normalized at insert time, so search already computes cosine via a simple dot product.
+
+After the deterministic accumulation change for snapshot-stable rankings, the vector-math paths were re-measured against the actual production `VectorMath` implementation on Apple M4 / Arm64 RyuJIT AdvSIMD:
+
+| Hot Path | Current Mean | Relative Result | Notes |
+|----------|--------------|-----------------|-------|
+| Dot product (384-dim) | **562 ns** | **1.7×** faster than scalar, **3.6×** faster than `TensorPrimitives.Dot` on this machine | Deterministic SIMD accumulation with scalar tail |
+| L2 norm (384-dim) | **459 ns** | **4.5×** faster than `TensorPrimitives.Norm`; about **1.2×** slower than the old non-deterministic SIMD helper | Deterministic sum-of-squares accumulation |
+| Vector normalization (384-dim) | **1.78 us** | Roughly on par with scalar, **1.6×** faster than the `TensorPrimitives.Norm` variant | Scalar rescale dominates once norm computation gets cheaper |
+
+Re-run the micro-benchmarks on your target deployment hardware before making startup or throughput promises from these figures.
 
 Run micro-benchmarks: `dotnet run --project benchmarks/Retrievo.PerfBenchmarks -c Release -- --filter "*"`
 

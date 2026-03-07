@@ -3,6 +3,7 @@ using Retrievo.Abstractions;
 using Retrievo.Fusion;
 using Retrievo.Lexical;
 using Retrievo.Models;
+using Retrievo.Snapshots;
 using Retrievo.Vector;
 using Lucene.Net.Index;
 using Lucene.Net.Search;
@@ -215,6 +216,200 @@ public sealed class MutableHybridSearchIndex : IMutableHybridSearchIndex
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         return _snapshot.Stats;
+    }
+
+    /// <summary>
+    /// Export the last committed snapshot to a versioned JSON snapshot file.
+    /// Pending uncommitted writes are not included.
+    /// </summary>
+    /// <param name="path">Destination file path.</param>
+    public void ExportSnapshot(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+        ExportSnapshot(stream);
+    }
+
+    /// <summary>
+    /// Export the last committed snapshot to a versioned JSON snapshot file asynchronously.
+    /// Pending uncommitted writes are not included.
+    /// </summary>
+    /// <param name="path">Destination file path.</param>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task ExportSnapshotAsync(string path, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        await using var stream = new FileStream(
+            path,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None,
+            bufferSize: 4096,
+            useAsync: true);
+
+        await ExportSnapshotAsync(stream, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Export the last committed snapshot to a versioned JSON snapshot stream.
+    /// Pending uncommitted writes are not included.
+    /// </summary>
+    /// <param name="stream">Destination stream.</param>
+    public void ExportSnapshot(Stream stream)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        var snapshot = AcquireSnapshot();
+        try
+        {
+            var orderedDocuments = SnapshotDocumentOrderer.Order(snapshot.Documents, snapshot.VectorEntries);
+            IndexSnapshotSerializer.Write(stream, orderedDocuments, snapshot.VectorEntries, _fieldDefinitions, _fuser);
+        }
+        finally
+        {
+            snapshot.Release();
+        }
+    }
+
+    /// <summary>
+    /// Export the last committed snapshot to a versioned JSON snapshot stream asynchronously.
+    /// Pending uncommitted writes are not included.
+    /// </summary>
+    /// <param name="stream">Destination stream.</param>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task ExportSnapshotAsync(Stream stream, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        var snapshot = AcquireSnapshot();
+        try
+        {
+            var orderedDocuments = SnapshotDocumentOrderer.Order(snapshot.Documents, snapshot.VectorEntries);
+            await IndexSnapshotSerializer.WriteAsync(stream, orderedDocuments, snapshot.VectorEntries, _fieldDefinitions, _fuser, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            snapshot.Release();
+        }
+    }
+
+    /// <summary>
+    /// Import a snapshot file into a new mutable index.
+    /// </summary>
+    /// <param name="path">Snapshot file path.</param>
+    /// <param name="embeddingProvider">
+    /// Optional embedding provider used only for future query embedding and async upserts. Stored document embeddings come from the snapshot.
+    /// </param>
+    /// <param name="fuser">
+    /// Optional fuser override. Required when importing a snapshot created with a custom <see cref="IFuser"/>.
+    /// </param>
+    public static MutableHybridSearchIndex ImportSnapshot(
+        string path,
+        IEmbeddingProvider? embeddingProvider = null,
+        IFuser? fuser = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        return ImportSnapshot(stream, embeddingProvider, fuser);
+    }
+
+    /// <summary>
+    /// Import a snapshot file into a new mutable index asynchronously.
+    /// </summary>
+    /// <param name="path">Snapshot file path.</param>
+    /// <param name="embeddingProvider">
+    /// Optional embedding provider used only for future query embedding and async upserts. Stored document embeddings come from the snapshot.
+    /// </param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <param name="fuser">
+    /// Optional fuser override. Required when importing a snapshot created with a custom <see cref="IFuser"/>.
+    /// </param>
+    public static async Task<MutableHybridSearchIndex> ImportSnapshotAsync(
+        string path,
+        IEmbeddingProvider? embeddingProvider = null,
+        CancellationToken ct = default,
+        IFuser? fuser = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        await using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 4096,
+            useAsync: true);
+
+        return await ImportSnapshotAsync(stream, embeddingProvider, ct, fuser).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Import a snapshot stream into a new mutable index.
+    /// </summary>
+    /// <param name="stream">Snapshot stream.</param>
+    /// <param name="embeddingProvider">
+    /// Optional embedding provider used only for future query embedding and async upserts. Stored document embeddings come from the snapshot.
+    /// </param>
+    /// <param name="fuser">
+    /// Optional fuser override. Required when importing a snapshot created with a custom <see cref="IFuser"/>.
+    /// </param>
+    public static MutableHybridSearchIndex ImportSnapshot(
+        Stream stream,
+        IEmbeddingProvider? embeddingProvider = null,
+        IFuser? fuser = null)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+
+        var sw = Stopwatch.StartNew();
+        var snapshot = IndexSnapshotSerializer.Read(stream);
+        sw.Stop();
+
+        return IndexFactory.CreateMutableHybridSearchIndex(
+            snapshot.Documents,
+            embeddingProvider,
+            SnapshotFuserRegistry.Resolve(snapshot.Fuser, fuser),
+            snapshot.FieldDefinitions,
+            sw.Elapsed.TotalMilliseconds,
+            vectorEntries: snapshot.VectorEntries);
+    }
+
+    /// <summary>
+    /// Import a snapshot stream into a new mutable index asynchronously.
+    /// </summary>
+    /// <param name="stream">Snapshot stream.</param>
+    /// <param name="embeddingProvider">
+    /// Optional embedding provider used only for future query embedding and async upserts. Stored document embeddings come from the snapshot.
+    /// </param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <param name="fuser">
+    /// Optional fuser override. Required when importing a snapshot created with a custom <see cref="IFuser"/>.
+    /// </param>
+    public static async Task<MutableHybridSearchIndex> ImportSnapshotAsync(
+        Stream stream,
+        IEmbeddingProvider? embeddingProvider = null,
+        CancellationToken ct = default,
+        IFuser? fuser = null)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+
+        var sw = Stopwatch.StartNew();
+        var snapshot = await IndexSnapshotSerializer.ReadAsync(stream, ct).ConfigureAwait(false);
+        sw.Stop();
+
+        return IndexFactory.CreateMutableHybridSearchIndex(
+            snapshot.Documents,
+            embeddingProvider,
+            SnapshotFuserRegistry.Resolve(snapshot.Fuser, fuser),
+            snapshot.FieldDefinitions,
+            sw.Elapsed.TotalMilliseconds,
+            vectorEntries: snapshot.VectorEntries);
     }
 
     private SearchResponse ExecuteSearch(HybridQuery query, float[]? queryVector, double? embeddingTimeMs, SearchSnapshot snapshot, Stopwatch totalSw, CancellationToken ct)
