@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Retrievo.Models;
 
 namespace Retrievo.IntegrationTests;
 
@@ -104,7 +105,7 @@ public class CliIntegrationTests : IDisposable
             $"query \"{nonExistent}\" --text \"test\"");
 
         Assert.Equal(1, exitCode);
-        Assert.Contains("Folder not found", stderr);
+        Assert.Contains("Input not found", stderr);
     }
 
     /// <summary>
@@ -118,6 +119,85 @@ public class CliIntegrationTests : IDisposable
 
         Assert.Equal(0, exitCode);
         Assert.Contains("lexical-only mode", stderr);
+    }
+
+    /// <summary>
+    /// CLI can export a snapshot and query it later.
+    /// </summary>
+    [Fact]
+    public async Task CliExport_ThenQuerySnapshot_Works()
+    {
+        var snapshotPath = Path.Combine(_testDocsFolder, "snapshot.retrievo.json");
+
+        var (exportExitCode, exportStdout, exportStderr) = await RunCliAsync(
+            $"export \"{_testDocsFolder}\" --output \"{snapshotPath}\"");
+
+        Assert.Equal(0, exportExitCode);
+        Assert.Contains("Exported snapshot", exportStdout);
+        Assert.True(File.Exists(snapshotPath));
+        Assert.Contains("Indexing files from", exportStderr);
+
+        var (queryExitCode, queryStdout, queryStderr) = await RunCliAsync(
+            $"query \"{snapshotPath}\" --text \"neural network\"");
+
+        Assert.Equal(0, queryExitCode);
+        Assert.Contains("Found", queryStdout);
+        Assert.Contains("machine-learning.md", queryStdout);
+        Assert.Contains("Loading snapshot from", queryStderr);
+    }
+
+    /// <summary>
+    /// Snapshot queries without an embedding provider warn that text queries run in lexical-only mode,
+    /// even when the snapshot contains stored document embeddings.
+    /// </summary>
+    [Fact]
+    public async Task CliQuery_SnapshotWithoutEmbeddingProvider_ShowsLexicalOnlyWarning()
+    {
+        var snapshotPath = Path.Combine(_testDocsFolder, "snapshot-with-embeddings.retrievo.json");
+
+        using (var index = new HybridSearchIndexBuilder()
+            .AddDocument(new Document
+            {
+                Id = "doc-1",
+                Title = "Vector Search",
+                Body = "Neural retrieval uses embeddings to compare semantic similarity.",
+                Embedding = new float[] { 1f, 0f }
+            })
+            .AddDocument(new Document
+            {
+                Id = "doc-2",
+                Title = "Lexical Search",
+                Body = "Keyword search relies on BM25 lexical ranking.",
+                Embedding = new float[] { 0f, 1f }
+            })
+            .Build())
+        {
+            index.ExportSnapshot(snapshotPath);
+        }
+
+        var (exitCode, _, stderr) = await RunCliAsync(
+            $"query \"{snapshotPath}\" --text \"semantic similarity\"");
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Loading snapshot from", stderr);
+        Assert.Contains("Text queries will run in lexical-only mode", stderr);
+        Assert.Contains("Stored document embeddings can still be loaded from snapshots", stderr);
+    }
+
+    /// <summary>
+    /// CLI query reports invalid snapshot files with a non-zero exit code.
+    /// </summary>
+    [Fact]
+    public async Task CliQuery_InvalidSnapshot_ExitCode1()
+    {
+        var snapshotPath = Path.Combine(_testDocsFolder, "invalid.retrievo.json");
+        await File.WriteAllTextAsync(snapshotPath, "{ not valid json }");
+
+        var (exitCode, _, stderr) = await RunCliAsync(
+            $"query \"{snapshotPath}\" --text \"neural network\"");
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Invalid snapshot JSON", stderr);
     }
 
     private async Task<(int ExitCode, string Stdout, string Stderr)> RunCliAsync(string arguments)

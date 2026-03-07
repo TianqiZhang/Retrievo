@@ -68,6 +68,30 @@ public sealed class BruteForceVectorRetriever : IVectorRetriever
     }
 
     /// <summary>
+    /// Add an already-normalized embedding to the index without re-normalizing it.
+    /// Used when rebuilding an exact snapshot of the live vector state.
+    /// </summary>
+    internal void AddNormalized(string id, float[] normalizedEmbedding)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        ArgumentNullException.ThrowIfNull(normalizedEmbedding);
+
+        if (normalizedEmbedding.Length == 0)
+            throw new ArgumentException("Embedding must not be empty.", nameof(normalizedEmbedding));
+
+        ValidateFiniteValues(normalizedEmbedding, nameof(normalizedEmbedding));
+
+        if (Dimensions == 0)
+            Dimensions = normalizedEmbedding.Length;
+        else if (normalizedEmbedding.Length != Dimensions)
+            throw new ArgumentException(
+                $"Embedding dimension mismatch: expected {Dimensions}, got {normalizedEmbedding.Length}.",
+                nameof(normalizedEmbedding));
+
+        _entries.Add((id, normalizedEmbedding.ToArray()));
+    }
+
+    /// <summary>
     /// Update an existing embedding or add it if not found.
     /// The embedding is normalized on insert.
     /// </summary>

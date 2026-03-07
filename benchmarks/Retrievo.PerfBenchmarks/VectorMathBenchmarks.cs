@@ -1,6 +1,8 @@
+using System.Numerics;
 using System.Numerics.Tensors;
 using System.Runtime.InteropServices;
 using BenchmarkDotNet.Attributes;
+using Retrievo.Vector;
 using SysVector = System.Numerics.Vector;
 using SysVectorFloat = System.Numerics.Vector<float>;
 
@@ -14,8 +16,11 @@ namespace Retrievo.PerfBenchmarks;
 [ShortRunJob]
 public class VectorMathBenchmarks
 {
+    private float[] _rawVectorA = null!;
+    private float[] _rawVectorB = null!;
     private float[] _vectorA = null!;
     private float[] _vectorB = null!;
+    private float[] _normalizeBuffer = null!;
 
     [Params(384, 768, 1536)]
     public int Dimensions { get; set; }
@@ -24,29 +29,36 @@ public class VectorMathBenchmarks
     public void Setup()
     {
         var rng = new Random(42);
-        _vectorA = new float[Dimensions];
-        _vectorB = new float[Dimensions];
+        _rawVectorA = new float[Dimensions];
+        _rawVectorB = new float[Dimensions];
+        _normalizeBuffer = new float[Dimensions];
 
         for (int i = 0; i < Dimensions; i++)
         {
-            _vectorA[i] = (float)(rng.NextDouble() * 2 - 1);
-            _vectorB[i] = (float)(rng.NextDouble() * 2 - 1);
+            _rawVectorA[i] = (float)(rng.NextDouble() * 2 - 1);
+            _rawVectorB[i] = (float)(rng.NextDouble() * 2 - 1);
         }
 
         // Pre-normalize like the real code does
-        NormalizeInPlace(_vectorA);
-        NormalizeInPlace(_vectorB);
+        _vectorA = VectorMath.Normalize(_rawVectorA);
+        _vectorB = VectorMath.Normalize(_rawVectorB);
+    }
+
+    [IterationSetup]
+    public void ResetBuffers()
+    {
+        _rawVectorA.AsSpan().CopyTo(_normalizeBuffer);
     }
 
     // ── Dot Product ──────────────────────────────────────────────────────
 
     /// <summary>
-    /// Current implementation: System.Numerics.Vector&lt;float&gt; SIMD dot product.
+    /// Current implementation: deterministic SIMD accumulation with scalar tail.
     /// </summary>
     [Benchmark(Baseline = true)]
     public float DotProduct_Current()
     {
-        return CurrentSimdDotProduct(_vectorA, _vectorB);
+        return VectorMath.DotProduct(_vectorA, _vectorB);
     }
 
     /// <summary>
@@ -70,12 +82,12 @@ public class VectorMathBenchmarks
     // ── L2 Norm ──────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Current implementation: scalar L2 norm (no SIMD).
+    /// Current implementation: deterministic SIMD accumulation with scalar tail.
     /// </summary>
     [Benchmark]
     public float L2Norm_Current()
     {
-        return CurrentScalarL2Norm(_vectorA);
+        return VectorMath.L2Norm(_vectorA);
     }
 
     /// <summary>
@@ -96,6 +108,35 @@ public class VectorMathBenchmarks
         return SimdL2Norm(_vectorA);
     }
 
+    // ── Normalize In Place ───────────────────────────────────────────────
+
+    /// <summary>
+    /// Current implementation: deterministic SIMD accumulation followed by scalar rescale.
+    /// </summary>
+    [Benchmark]
+    public float NormalizeInPlace_Current()
+    {
+        return VectorMath.NormalizeInPlace(_normalizeBuffer);
+    }
+
+    /// <summary>
+    /// TensorPrimitives.Norm for the norm calculation, with the same scalar rescale.
+    /// </summary>
+    [Benchmark]
+    public float NormalizeInPlace_TensorPrimitives()
+    {
+        return TensorNormalizeInPlace(_normalizeBuffer);
+    }
+
+    /// <summary>
+    /// Scalar-only normalization for baseline comparison.
+    /// </summary>
+    [Benchmark]
+    public float NormalizeInPlace_Scalar()
+    {
+        return ScalarNormalizeInPlace(_normalizeBuffer);
+    }
+
     // ── Cosine Similarity (end-to-end) ───────────────────────────────────
 
     /// <summary>
@@ -105,14 +146,9 @@ public class VectorMathBenchmarks
     [Benchmark]
     public float CosineSimilarity_NormalizeThenDot()
     {
-        // Simulate what happens in the real code: normalize copy + dot
-        var normA = new float[Dimensions];
-        var normB = new float[Dimensions];
-        _vectorA.AsSpan().CopyTo(normA);
-        _vectorB.AsSpan().CopyTo(normB);
-        NormalizeInPlace(normA);
-        NormalizeInPlace(normB);
-        return CurrentSimdDotProduct(normA, normB);
+        var normA = VectorMath.Normalize(_rawVectorA);
+        var normB = VectorMath.Normalize(_rawVectorB);
+        return VectorMath.DotProduct(normA, normB);
     }
 
     /// <summary>
@@ -124,35 +160,7 @@ public class VectorMathBenchmarks
         return TensorPrimitives.CosineSimilarity(_vectorA.AsSpan(), _vectorB.AsSpan());
     }
 
-    // ── Implementation helpers (inlined for benchmark isolation) ─────────
-
-    private static float CurrentSimdDotProduct(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
-    {
-        float sum = 0f;
-        int i = 0;
-
-        if (SysVector.IsHardwareAccelerated && a.Length >= SysVectorFloat.Count)
-        {
-            var spanA = MemoryMarshal.Cast<float, SysVectorFloat>(a);
-            var spanB = MemoryMarshal.Cast<float, SysVectorFloat>(b);
-
-            var vSum = SysVectorFloat.Zero;
-            for (int v = 0; v < spanA.Length; v++)
-            {
-                vSum += spanA[v] * spanB[v];
-            }
-
-            sum = SysVector.Sum(vSum);
-            i = spanA.Length * SysVectorFloat.Count;
-        }
-
-        for (; i < a.Length; i++)
-        {
-            sum += a[i] * b[i];
-        }
-
-        return sum;
-    }
+    // ── Comparison helpers ────────────────────────────────────────────────
 
     private static float ScalarDotProduct(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
     {
@@ -160,14 +168,6 @@ public class VectorMathBenchmarks
         for (int i = 0; i < a.Length; i++)
             sum += a[i] * b[i];
         return sum;
-    }
-
-    private static float CurrentScalarL2Norm(ReadOnlySpan<float> v)
-    {
-        float sum = 0f;
-        for (int i = 0; i < v.Length; i++)
-            sum += v[i] * v[i];
-        return MathF.Sqrt(sum);
     }
 
     private static float SimdL2Norm(ReadOnlySpan<float> v)
@@ -195,15 +195,33 @@ public class VectorMathBenchmarks
         return MathF.Sqrt(sum);
     }
 
-    private static void NormalizeInPlace(Span<float> v)
+    private static float TensorNormalizeInPlace(Span<float> v)
+    {
+        float norm = TensorPrimitives.Norm(v);
+        if (norm == 0f)
+            return 0f;
+
+        float inv = 1f / norm;
+        for (int i = 0; i < v.Length; i++)
+            v[i] *= inv;
+
+        return norm;
+    }
+
+    private static float ScalarNormalizeInPlace(Span<float> v)
     {
         float sum = 0f;
         for (int i = 0; i < v.Length; i++)
             sum += v[i] * v[i];
+
         float norm = MathF.Sqrt(sum);
-        if (norm == 0f) return;
+        if (norm == 0f)
+            return 0f;
+
         float inv = 1f / norm;
         for (int i = 0; i < v.Length; i++)
             v[i] *= inv;
+
+        return norm;
     }
 }

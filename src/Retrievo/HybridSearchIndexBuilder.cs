@@ -1,9 +1,7 @@
 using System.Diagnostics;
 using Retrievo.Abstractions;
 using Retrievo.Fusion;
-using Retrievo.Lexical;
 using Retrievo.Models;
-using Retrievo.Vector;
 
 namespace Retrievo;
 
@@ -130,48 +128,18 @@ public sealed class HybridSearchIndexBuilder
     public HybridSearchIndex Build()
     {
         var sw = Stopwatch.StartNew();
-
-        if (_documents.Count == 0)
-            throw new InvalidOperationException("Cannot build an index with no documents.");
-
         DocumentCollectionValidator.ValidateUniqueIds(_documents);
 
         if (_embeddingProvider is not null && _documents.Any(doc => doc.Embedding is null))
             throw new InvalidOperationException("Synchronous Build() cannot generate embeddings for documents. Use BuildAsync(), or provide pre-computed Embedding values on all documents.");
 
-        var lexicalRetriever = new LuceneLexicalRetriever();
-        var vectorRetriever = new BruteForceVectorRetriever();
-        var fuser = _fuser ?? new RrfFuser();
-        var docMap = new Dictionary<string, Document>(_documents.Count, StringComparer.Ordinal);
-
-        int? embeddingDimension = null;
-
-        foreach (var doc in _documents)
-        {
-            docMap[doc.Id] = doc;
-
-            // Index in lexical retriever
-            lexicalRetriever.Add(doc.Id, doc.Body, doc.Title);
-
-            // Index in vector retriever (if embedding available)
-            if (doc.Embedding is not null)
-            {
-                vectorRetriever.Add(doc.Id, doc.Embedding);
-                embeddingDimension ??= doc.Embedding.Length;
-            }
-        }
-
         sw.Stop();
-
-        var stats = new IndexStats
-        {
-            DocumentCount = _documents.Count,
-            EmbeddingDimension = embeddingDimension,
-            IndexBuildTimeMs = sw.Elapsed.TotalMilliseconds
-        };
-
-        var fieldDefinitionsCopy = new Dictionary<string, FieldDefinition>(_fieldDefinitions, StringComparer.Ordinal);
-        return new HybridSearchIndex(lexicalRetriever, vectorRetriever, fuser, _embeddingProvider, docMap, stats, fieldDefinitionsCopy);
+        return IndexFactory.CreateHybridSearchIndex(
+            _documents,
+            _embeddingProvider,
+            _fuser,
+            _fieldDefinitions,
+            sw.Elapsed.TotalMilliseconds);
     }
 
     /// <summary>
@@ -181,48 +149,18 @@ public sealed class HybridSearchIndexBuilder
     public async Task<HybridSearchIndex> BuildAsync(CancellationToken ct = default)
     {
         var sw = Stopwatch.StartNew();
-
-        if (_documents.Count == 0)
-            throw new InvalidOperationException("Cannot build an index with no documents.");
-
         DocumentCollectionValidator.ValidateUniqueIds(_documents);
 
         // Generate embeddings for documents that don't have them
         await EnsureEmbeddingsAsync(ct).ConfigureAwait(false);
 
-        var lexicalRetriever = new LuceneLexicalRetriever();
-        var vectorRetriever = new BruteForceVectorRetriever();
-        var fuser = _fuser ?? new RrfFuser();
-        var docMap = new Dictionary<string, Document>(_documents.Count, StringComparer.Ordinal);
-
-        int? embeddingDimension = null;
-
-        foreach (var doc in _documents)
-        {
-            docMap[doc.Id] = doc;
-
-            // Index in lexical retriever
-            lexicalRetriever.Add(doc.Id, doc.Body, doc.Title);
-
-            // Index in vector retriever (if embedding available)
-            if (doc.Embedding is not null)
-            {
-                vectorRetriever.Add(doc.Id, doc.Embedding);
-                embeddingDimension ??= doc.Embedding.Length;
-            }
-        }
-
         sw.Stop();
-
-        var stats = new IndexStats
-        {
-            DocumentCount = _documents.Count,
-            EmbeddingDimension = embeddingDimension,
-            IndexBuildTimeMs = sw.Elapsed.TotalMilliseconds
-        };
-
-        var fieldDefinitionsCopy = new Dictionary<string, FieldDefinition>(_fieldDefinitions, StringComparer.Ordinal);
-        return new HybridSearchIndex(lexicalRetriever, vectorRetriever, fuser, _embeddingProvider, docMap, stats, fieldDefinitionsCopy);
+        return IndexFactory.CreateHybridSearchIndex(
+            _documents,
+            _embeddingProvider,
+            _fuser,
+            _fieldDefinitions,
+            sw.Elapsed.TotalMilliseconds);
     }
 
     /// <summary>

@@ -1,10 +1,10 @@
-using System.Numerics.Tensors;
+using System.Numerics;
 
 namespace Retrievo.Vector;
 
 /// <summary>
 /// SIMD-accelerated vector math utilities for cosine similarity computation.
-/// Uses System.Numerics.Tensors for hardware-accelerated dot products and norms.
+/// Uses deterministic accumulation so rankings do not depend on span alignment.
 /// </summary>
 internal static class VectorMath
 {
@@ -17,7 +17,7 @@ internal static class VectorMath
         if (a.Length != b.Length)
             throw new ArgumentException($"Vector dimensions must match: {a.Length} vs {b.Length}");
 
-        return TensorPrimitives.Dot(a, b);
+        return (float)DotProductDeterministic(a, b);
     }
 
     /// <summary>
@@ -25,7 +25,7 @@ internal static class VectorMath
     /// </summary>
     public static float L2Norm(ReadOnlySpan<float> v)
     {
-        return TensorPrimitives.Norm(v);
+        return (float)Math.Sqrt(SumSquaresDeterministic(v));
     }
 
     /// <summary>
@@ -54,5 +54,50 @@ internal static class VectorMath
         v.CopyTo(result);
         NormalizeInPlace(result);
         return result;
+    }
+
+    private static double DotProductDeterministic(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
+    {
+        var sum = 0d;
+        var width = Vector<float>.Count;
+        var i = 0;
+        var vectorSum = Vector<float>.Zero;
+
+        for (; i <= a.Length - width; i += width)
+        {
+            var va = new Vector<float>(a.Slice(i, width));
+            var vb = new Vector<float>(b.Slice(i, width));
+            vectorSum += va * vb;
+        }
+
+        for (var lane = 0; lane < Vector<float>.Count; lane++)
+            sum += vectorSum[lane];
+
+        for (; i < a.Length; i++)
+            sum += (double)a[i] * b[i];
+
+        return sum;
+    }
+
+    private static double SumSquaresDeterministic(ReadOnlySpan<float> v)
+    {
+        var sum = 0d;
+        var width = Vector<float>.Count;
+        var i = 0;
+        var vectorSum = Vector<float>.Zero;
+
+        for (; i <= v.Length - width; i += width)
+        {
+            var chunk = new Vector<float>(v.Slice(i, width));
+            vectorSum += chunk * chunk;
+        }
+
+        for (var lane = 0; lane < Vector<float>.Count; lane++)
+            sum += vectorSum[lane];
+
+        for (; i < v.Length; i++)
+            sum += (double)v[i] * v[i];
+
+        return sum;
     }
 }

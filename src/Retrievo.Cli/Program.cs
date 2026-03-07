@@ -1,13 +1,18 @@
 using System.CommandLine;
 using System.CommandLine.Invocation;
+using System.Text.Json;
 using Retrievo;
 using Retrievo.Abstractions;
 using Retrievo.AzureOpenAI;
 using Retrievo.Models;
 
+var inputArgument = new Argument<string>(
+    name: "input",
+    description: "Path to a folder of .md/.txt files, or a saved Retrievo snapshot file.");
+
 var folderArgument = new Argument<DirectoryInfo>(
     name: "folder",
-    description: "Path to the folder containing .md and .txt files to search.");
+    description: "Path to the folder containing .md and .txt files to snapshot.");
 
 var textOption = new Option<string>(
     name: "--text",
@@ -28,11 +33,17 @@ var explainOption = new Option<bool>(
 var embeddingProviderOption = new Option<string?>(
     name: "--embedding-provider",
     description: "Embedding provider to use. Supported: 'azure-openai'. " +
-                 "If not specified, operates in lexical-only mode.");
+                 "If not specified, text queries operate in lexical-only mode even when a snapshot contains stored embeddings.");
 
-var queryCommand = new Command("query", "Build an in-memory index from a folder and run a hybrid search query.")
+var outputOption = new Option<FileInfo>(
+    name: "--output",
+    description: "Destination snapshot file path.")
+{ IsRequired = true };
+outputOption.AddAlias("-o");
+
+var queryCommand = new Command("query", "Query a folder of local documents or a previously exported snapshot.")
 {
-    folderArgument,
+    inputArgument,
     textOption,
     topKOption,
     explainOption,
@@ -41,15 +52,16 @@ var queryCommand = new Command("query", "Build an in-memory index from a folder 
 
 queryCommand.SetHandler(async (InvocationContext context) =>
 {
-    var folder = context.ParseResult.GetValueForArgument(folderArgument);
+    var inputPath = context.ParseResult.GetValueForArgument(inputArgument)!;
     var text = context.ParseResult.GetValueForOption(textOption)!;
     var topK = context.ParseResult.GetValueForOption(topKOption);
     var explain = context.ParseResult.GetValueForOption(explainOption);
     var providerName = context.ParseResult.GetValueForOption(embeddingProviderOption);
+    var input = ResolveInput(inputPath);
 
-    if (!folder.Exists)
+    if (!input.Exists)
     {
-        Console.Error.WriteLine($"Error: Folder not found: {folder.FullName}");
+        Console.Error.WriteLine($"Error: Input not found: {input.FullName}");
         context.ExitCode = 1;
         return;
     }
@@ -71,33 +83,53 @@ queryCommand.SetHandler(async (InvocationContext context) =>
         embeddingProvider = TryAutoDetectProvider();
     }
 
-    if (embeddingProvider is null)
+    if (input is DirectoryInfo)
     {
-        Console.Error.WriteLine("Warning: No embedding provider configured. Operating in lexical-only mode.");
-        Console.Error.WriteLine("  Set RETRIEVO_AZURE_OPENAI_ENDPOINT, RETRIEVO_AZURE_OPENAI_KEY, and");
-        Console.Error.WriteLine("  RETRIEVO_AZURE_OPENAI_DEPLOYMENT environment variables, or use");
-        Console.Error.WriteLine("  --embedding-provider azure-openai.");
-        Console.Error.WriteLine();
+        Console.Error.WriteLine($"Indexing files from: {input.FullName}");
     }
-
-    // Build the index
-    Console.Error.WriteLine($"Indexing files from: {folder.FullName}");
-    var builder = new HybridSearchIndexBuilder()
-        .AddFolder(folder.FullName);
-
-    if (embeddingProvider is not null)
+    else
     {
-        builder.WithEmbeddingProvider(embeddingProvider);
+        Console.Error.WriteLine($"Loading snapshot from: {input.FullName}");
     }
 
     HybridSearchIndex index;
     try
     {
-        index = await builder.BuildAsync(context.GetCancellationToken());
+        index = await LoadIndexAsync(input, embeddingProvider, context.GetCancellationToken());
     }
-    catch (InvalidOperationException) // BuildAsync only throws this for "no documents"
+    catch (InvalidOperationException) when (input is DirectoryInfo)
     {
-        Console.Error.WriteLine($"Error: No indexable documents found in {folder.FullName}");
+        Console.Error.WriteLine($"Error: No indexable documents found in {input.FullName}");
+        context.ExitCode = 1;
+        return;
+    }
+    catch (InvalidOperationException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        context.ExitCode = 1;
+        return;
+    }
+    catch (DirectoryNotFoundException)
+    {
+        Console.Error.WriteLine($"Error: Folder not found: {input.FullName}");
+        context.ExitCode = 1;
+        return;
+    }
+    catch (InvalidDataException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        context.ExitCode = 1;
+        return;
+    }
+    catch (JsonException ex)
+    {
+        Console.Error.WriteLine($"Error: Invalid snapshot JSON. {ex.Message}");
+        context.ExitCode = 1;
+        return;
+    }
+    catch (NotSupportedException ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
         context.ExitCode = 1;
         return;
     }
@@ -105,7 +137,19 @@ queryCommand.SetHandler(async (InvocationContext context) =>
     using (index)
     {
         var stats = index.GetStats();
-        Console.Error.WriteLine($"Indexed {stats.DocumentCount} documents " +
+        if (embeddingProvider is null)
+        {
+            Console.Error.WriteLine("Warning: No embedding provider configured. Text queries will run in lexical-only mode.");
+            Console.Error.WriteLine("  Stored document embeddings can still be loaded from snapshots, but query vectors");
+            Console.Error.WriteLine("  will not be generated unless you configure an embedding provider.");
+            Console.Error.WriteLine("  Set RETRIEVO_AZURE_OPENAI_ENDPOINT, RETRIEVO_AZURE_OPENAI_KEY, and");
+            Console.Error.WriteLine("  RETRIEVO_AZURE_OPENAI_DEPLOYMENT environment variables, or use");
+            Console.Error.WriteLine("  --embedding-provider azure-openai.");
+            Console.Error.WriteLine();
+        }
+
+        var action = input is DirectoryInfo ? "Indexed" : "Loaded";
+        Console.Error.WriteLine($"{action} {stats.DocumentCount} documents " +
             (stats.EmbeddingDimension.HasValue
                 ? $"({stats.EmbeddingDimension.Value}-dim embeddings) "
                 : "(lexical only) ") +
@@ -158,9 +202,84 @@ queryCommand.SetHandler(async (InvocationContext context) =>
     }
 });
 
-var rootCommand = new RootCommand("HybridSearch CLI — hybrid lexical + vector search for local document folders.")
+var exportCommand = new Command("export", "Build an index from a folder and export it as a snapshot.")
 {
-    queryCommand
+    folderArgument,
+    outputOption,
+    embeddingProviderOption
+};
+
+exportCommand.SetHandler(async (InvocationContext context) =>
+{
+    var folder = context.ParseResult.GetValueForArgument(folderArgument);
+    var output = context.ParseResult.GetValueForOption(outputOption)!;
+    var providerName = context.ParseResult.GetValueForOption(embeddingProviderOption);
+
+    if (!folder.Exists)
+    {
+        Console.Error.WriteLine($"Error: Folder not found: {folder.FullName}");
+        context.ExitCode = 1;
+        return;
+    }
+
+    IEmbeddingProvider? embeddingProvider = null;
+    if (!string.IsNullOrEmpty(providerName))
+    {
+        embeddingProvider = CreateEmbeddingProvider(providerName);
+        if (embeddingProvider is null)
+        {
+            context.ExitCode = 1;
+            return;
+        }
+    }
+    else
+    {
+        embeddingProvider = TryAutoDetectProvider();
+    }
+
+    Console.Error.WriteLine($"Indexing files from: {folder.FullName}");
+    var builder = new HybridSearchIndexBuilder()
+        .AddFolder(folder.FullName);
+
+    if (embeddingProvider is not null)
+    {
+        builder.WithEmbeddingProvider(embeddingProvider);
+    }
+
+    HybridSearchIndex index;
+    try
+    {
+        index = await builder.BuildAsync(context.GetCancellationToken());
+    }
+    catch (InvalidOperationException)
+    {
+        Console.Error.WriteLine($"Error: No indexable documents found in {folder.FullName}");
+        context.ExitCode = 1;
+        return;
+    }
+
+    using (index)
+    {
+        try
+        {
+            await index.ExportSnapshotAsync(output.FullName, context.GetCancellationToken());
+        }
+        catch (DirectoryNotFoundException)
+        {
+            Console.Error.WriteLine($"Error: Output directory not found for {output.FullName}");
+            context.ExitCode = 1;
+            return;
+        }
+
+        var stats = index.GetStats();
+        Console.WriteLine($"Exported snapshot with {stats.DocumentCount} documents to {output.FullName}");
+    }
+});
+
+var rootCommand = new RootCommand("HybridSearch CLI — hybrid lexical + vector search for local folders and saved snapshots.")
+{
+    queryCommand,
+    exportCommand
 };
 
 return await rootCommand.InvokeAsync(args);
@@ -204,4 +323,40 @@ static IEmbeddingProvider? TryAutoDetectProvider()
     }
 
     return null;
+}
+
+static async Task<HybridSearchIndex> LoadIndexAsync(
+    FileSystemInfo input,
+    IEmbeddingProvider? embeddingProvider,
+    CancellationToken ct)
+{
+    if (input is DirectoryInfo directory)
+    {
+        var builder = new HybridSearchIndexBuilder()
+            .AddFolder(directory.FullName);
+
+        if (embeddingProvider is not null)
+        {
+            builder.WithEmbeddingProvider(embeddingProvider);
+        }
+
+        return await builder.BuildAsync(ct);
+    }
+
+    if (input is FileInfo file)
+    {
+        return await HybridSearchIndex.ImportSnapshotAsync(file.FullName, embeddingProvider, ct: ct);
+    }
+
+    throw new InvalidOperationException($"Unsupported input type: {input.GetType().Name}");
+}
+
+static FileSystemInfo ResolveInput(string path)
+{
+    ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+    if (Directory.Exists(path))
+        return new DirectoryInfo(path);
+
+    return new FileInfo(path);
 }
